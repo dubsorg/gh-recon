@@ -3,11 +3,11 @@
 A [`gh`](https://cli.github.com/) CLI extension: a terminal UI (TUI) for GitHub
 organization recon, built with [Textual](https://textual.textualize.io/).
 
-Scoped to a single organization, it provides two commands:
+Scoped to a single organization, it opens to a **home menu** that branches into:
 
-- **Search users** — filter the org's members by login.
-- **Get user info** — full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
-- **Repositories** (press `R` from the member list) — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, and **recent commits**.
+- **Users** — search the org's members by login, then **get user info**: full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
+- **Repositories** — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, and **recent commits**.
+- **Runners** — list the org's Actions **self-hosted runners**, **grouped by runner group**, with online/offline status, idle/busy state, labels, and — for busy runners — the **workflow / job** they're currently running and on which repo.
 
 ## Install
 
@@ -38,6 +38,9 @@ A token is resolved in this order: `--token`, `GH_TOKEN`, `GITHUB_TOKEN`, then `
   (fine-grained: *Organization → Administration* read) and is a **GitHub Enterprise Cloud**
   feature. Without it, the user-info screen shows a clear "audit log unavailable" notice and
   the rest of the app still works.
+- **Runners** require an **organization admin** token with `admin:org` (fine-grained:
+  *Organization → Self-hosted runners* read). Without it, the runners screen shows a clear
+  "runners unavailable" notice and the rest of the app still works.
 
 ## Run
 
@@ -52,16 +55,35 @@ If no org is supplied, the app prompts for one on startup.
 For local development without installing the extension, `./run.sh ORG` invokes the
 same entrypoint (`./gh-recon`) directly.
 
+### Mock mode
+
+```bash
+gh recon --mock            # or: gh recon ORG --mock
+```
+
+`--mock` runs the app against synthetic data generated at start time — no token
+and no network calls. The dataset is seeded from the org name, so a given org
+yields stable, internally-consistent members, repos, users, and runners. Useful
+for demos, screenshots, and UI work offline.
+
 ## Keys
+
+**Home menu**
+| Key | Action |
+| --- | --- |
+| `Enter` | Open the highlighted area |
+| `u` | Users |
+| `R` | Repositories |
+| `a` | Runners |
+| `q` | Quit |
 
 **Member list**
 | Key | Action |
 | --- | --- |
 | `/` | Focus the filter box |
 | `Enter` | View selected user |
-| `R` | Repositories |
 | `r` | Refresh members |
-| `q` | Quit |
+| `Esc` | Back to home menu |
 
 **Repository list** / **Repo detail**
 | Key | Action |
@@ -79,14 +101,34 @@ same entrypoint (`./gh-recon`) directly.
 | `r` | Refresh |
 | `o` | Open user on github.com |
 
+**Runners**
+| Key | Action |
+| --- | --- |
+| `r` | Refresh |
+| `Esc` | Back to home menu |
+
 ## Layout
 
 ```
 gh-recon          # executable extension entrypoint (gh runs this as `gh recon`)
 requirements.txt  # Python deps installed into the auto-created venv
 gh_recon/
-  api.py          # requests-based GitHub client (members, user, repos, audit log)
-  app.py          # Textual app: members, user-detail, repositories, repo-detail screens
+  models.py       # dataclasses shared by both layers
+  api/            # requests-based GitHub client, split by domain
+    base.py       #   transport (_get/_graphql), GitHubError, token resolution
+    members.py    #   org members + roles
+    repos.py      #   repositories, contributors, commits, languages
+    runners.py    #   Actions self-hosted runners + current-job correlation
+    users.py      #   user profile, keys, teams, audit log, commit activity
+    mock.py       #   offline MockClient: synthetic data for --mock
+  ui/             # Textual screens, one module per domain
+    app.py        #   app shell + org prompt
+    home.py       #   landing menu (Users / Repositories / Runners)
+    members.py    #   member-search screen
+    users.py      #   user-detail screen
+    repos.py      #   repository list + detail screens
+    runners.py    #   Actions runners screen
+    common.py     #   shared formatting helpers
   __main__.py     # CLI entry point
 ```
 

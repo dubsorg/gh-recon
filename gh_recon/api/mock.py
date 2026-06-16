@@ -1,0 +1,364 @@
+"""Offline mock client: synthetic data generated at start time.
+
+Mirrors the public surface of :class:`GitHubClient` so the Textual UI can run
+without a token or network access (``--mock``). Every dataset is generated once
+in :meth:`__init__` from a seed derived from the org name, so a given org yields
+stable, internally-consistent data for the life of the process. No HTTP, no auth.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import random
+from datetime import datetime, timedelta, timezone
+
+from ..models import (
+    AuditEvent,
+    CommitInfo,
+    Member,
+    PublicKeys,
+    RepoCommitActivity,
+    Runner,
+    RunnerJob,
+    UserInfo,
+)
+from .base import GitHubError
+
+_FIRST = [
+    "ada", "alan", "grace", "linus", "margaret", "dennis", "ken", "barbara",
+    "guido", "yukihiro", "bjarne", "anders", "rich", "rob", "brian", "donald",
+    "edsger", "john", "joan", "katherine", "radia", "leslie",
+]
+_LAST = [
+    "lovelace", "turing", "hopper", "torvalds", "hamilton", "ritchie",
+    "thompson", "liskov", "rossum", "matsumoto", "stroustrup", "perlis",
+    "knuth", "dijkstra", "mccarthy", "clarke", "johnson", "perlman", "lamport",
+]
+_LANGS = ["Python", "Go", "Rust", "TypeScript", "JavaScript", "Ruby", "Java",
+          "C", "C++", "Shell", "HTML", "Kotlin", "Swift"]
+_LOCATIONS = ["Berlin, DE", "Austin, TX", "Tokyo, JP", "London, UK",
+              "Toronto, CA", "São Paulo, BR", "Bangalore, IN", "Remote"]
+_REPO_WORDS = ["core", "api", "web", "infra", "cli", "auth", "data", "edge",
+               "service", "worker", "bridge", "engine", "gateway", "sdk",
+               "pipeline", "dashboard", "scheduler", "registry", "proxy"]
+_ACTIONS = ["repo.create", "repo.destroy", "team.add_member", "org.update_member",
+            "protected_branch.update", "members.remove", "oauth_access.create",
+            "repo.access", "workflows.approve_workflow_job", "secret_scanning.enable"]
+_WORKFLOWS = ["CI", "Release", "Deploy", "Lint", "Nightly", "Integration Tests"]
+_JOBS = ["build", "test", "lint", "publish", "package", "e2e"]
+
+
+class MockClient:
+    """Drop-in stand-in for :class:`GitHubClient` backed by synthetic data."""
+
+    def __init__(self, org: str, token: str | None = None, seed: int | None = None):
+        self.org = org
+        self.token = token
+        rng = random.Random(seed if seed is not None else _seed_from(org))
+        self._now = datetime.now(timezone.utc)
+        self._rng = rng
+
+        self._members = self._gen_members(rng, count=rng.randint(24, 40))
+        self._logins = [m.login for m in self._members]
+        self._repos = self._gen_repos(rng, count=rng.randint(18, 30))
+        self._repos_by_name = {r.name: r for r in self._repos}
+        self._runners = self._gen_runners(rng, count=rng.randint(4, 10))
+        self._user_cache: dict[str, UserInfo] = {}
+
+    # -- generation -------------------------------------------------------
+
+    def _gen_members(self, rng: random.Random, count: int) -> list[Member]:
+        logins: list[str] = []
+        seen: set[str] = set()
+        while len(logins) < count:
+            login = f"{rng.choice(_FIRST)}-{rng.choice(_LAST)}"
+            if login in seen:
+                login = f"{login}{rng.randint(1, 99)}"
+            seen.add(login)
+            logins.append(login)
+        members = []
+        for i, login in enumerate(sorted(logins)):
+            members.append(
+                Member(
+                    login=login,
+                    id=1000 + i,
+                    type="User",
+                    site_admin=rng.random() < 0.05,
+                    html_url=f"https://github.com/{login}",
+                )
+            )
+        return members
+
+    def _gen_repos(self, rng: random.Random, count: int):
+        from ..models import Repo
+
+        names: list[str] = []
+        seen: set[str] = set()
+        while len(names) < count:
+            n = rng.randint(1, 2)
+            name = "-".join(rng.sample(_REPO_WORDS, n))
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        repos = []
+        for name in names:
+            created = self._now - timedelta(days=rng.randint(120, 2000))
+            pushed = self._now - timedelta(days=rng.randint(0, 200),
+                                           hours=rng.randint(0, 23))
+            repos.append(
+                Repo(
+                    name=name,
+                    full_name=f"{self.org}/{name}",
+                    private=rng.random() < 0.4,
+                    archived=rng.random() < 0.1,
+                    fork=rng.random() < 0.15,
+                    language=rng.choice(_LANGS),
+                    stars=rng.randint(0, 4000),
+                    forks=rng.randint(0, 600),
+                    open_issues=rng.randint(0, 120),
+                    pushed_at=pushed,
+                    description=rng.choice([
+                        None,
+                        f"{name} service for the {self.org} platform",
+                        f"Internal tooling: {name}",
+                        f"Experimental {rng.choice(_LANGS)} project",
+                    ]),
+                    default_branch=rng.choice(["main", "master", "trunk"]),
+                    html_url=f"https://github.com/{self.org}/{name}",
+                    watchers=rng.randint(0, 500),
+                    size=rng.randint(50, 500000),
+                    created_at=created,
+                )
+            )
+        # most-recently-pushed first, matching list_repos
+        repos.sort(key=lambda r: r.pushed_at or self._now, reverse=True)
+        return repos
+
+    def _gen_runners(self, rng: random.Random, count: int) -> list[Runner]:
+        runners = []
+        oses = ["linux", "macos", "windows"]
+        groups = ["Default", "gpu-pool", "deploy", "macos-fleet"]
+        for i in range(count):
+            online = rng.random() < 0.85
+            runners.append(
+                Runner(
+                    id=200 + i,
+                    name=f"{rng.choice(['ip', 'gh', 'self'])}-runner-{i:02d}",
+                    os=rng.choice(oses),
+                    status="online" if online else "offline",
+                    busy=online and rng.random() < 0.5,
+                    labels=sorted(set(
+                        ["self-hosted", rng.choice(oses)]
+                        + rng.sample(["x64", "arm64", "gpu", "large"],
+                                     rng.randint(0, 2))
+                    )),
+                    group=rng.choice(groups),
+                )
+            )
+        return runners
+
+    def _user_seed(self, login: str) -> random.Random:
+        return random.Random(f"{self.org}/{login}")
+
+    # -- members ----------------------------------------------------------
+
+    def list_members(self, max_results: int = 500) -> list[Member]:
+        return self._members[:max_results]
+
+    def search_members(self, query: str, max_results: int = 500) -> list[Member]:
+        members = self.list_members(max_results=max_results)
+        if not query:
+            return members
+        q = query.lower()
+        return [m for m in members if q in m.login.lower()]
+
+    def org_role(self, login: str) -> str | None:
+        if login not in self._logins:
+            return None
+        return "admin" if self._user_seed(login).random() < 0.2 else "member"
+
+    # -- repos ------------------------------------------------------------
+
+    def list_repos(self, max_results: int = 500) -> list:
+        return self._repos[:max_results]
+
+    def search_repos(self, query: str, max_results: int = 500) -> list:
+        repos = self.list_repos(max_results=max_results)
+        if not query:
+            return repos
+        q = query.lower()
+        return [
+            r for r in repos
+            if q in r.name.lower() or (r.description and q in r.description.lower())
+        ]
+
+    def get_repo(self, name: str):
+        key = name.split("/")[-1]
+        repo = self._repos_by_name.get(key)
+        if repo is None:
+            raise GitHubError("not found", 404)
+        return repo
+
+    def repo_contributors(self, name: str, limit: int = 15) -> list[tuple[str, int]]:
+        rng = random.Random(f"{self.org}/{name}/contributors")
+        n = min(limit, rng.randint(3, 15), len(self._logins))
+        people = rng.sample(self._logins, n)
+        out = [(login, rng.randint(1, 800)) for login in people]
+        out.sort(key=lambda kv: kv[1], reverse=True)
+        return out[:limit]
+
+    def repo_commits(self, name: str, limit: int = 20) -> list[CommitInfo]:
+        rng = random.Random(f"{self.org}/{name}/commits")
+        verbs = ["Add", "Fix", "Refactor", "Remove", "Update", "Bump", "Wire up"]
+        nouns = ["pagination", "auth flow", "error handling", "the cache layer",
+                 "CI config", "the README", "retry logic", "type hints"]
+        commits = []
+        when = self._now
+        for _ in range(min(limit, rng.randint(5, 20))):
+            when = when - timedelta(hours=rng.randint(1, 72))
+            sha = hashlib.sha1(f"{name}{when}".encode()).hexdigest()[:7]
+            commits.append(
+                CommitInfo(
+                    sha=sha,
+                    author=rng.choice(self._logins),
+                    date=when,
+                    message=f"{rng.choice(verbs)} {rng.choice(nouns)}",
+                )
+            )
+        return commits
+
+    def language_bytes(self, repo_full_names: list[str],
+                       max_repos: int = 25) -> list[tuple[str, int]]:
+        totals: dict[str, int] = {}
+        for full in repo_full_names[:max_repos]:
+            rng = random.Random(f"{full}/languages")
+            for lang in rng.sample(_LANGS, rng.randint(1, 4)):
+                totals[lang] = totals.get(lang, 0) + rng.randint(1000, 800000)
+        return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+    # -- runners ----------------------------------------------------------
+
+    def list_runners(self, max_results: int = 200) -> list[Runner]:
+        return self._runners[:max_results]
+
+    def running_jobs(self, max_repos: int = 60) -> dict[str, RunnerJob]:
+        jobs: dict[str, RunnerJob] = {}
+        for r in self._runners:
+            if not r.busy:
+                continue
+            rng = random.Random(f"{self.org}/{r.name}/job")
+            repo = rng.choice(self._repos)
+            jobs[r.name] = RunnerJob(
+                runner_name=r.name,
+                workflow=rng.choice(_WORKFLOWS),
+                job=rng.choice(_JOBS),
+                repo=repo.name,
+                html_url=f"{repo.html_url}/actions/runs/{rng.randint(1, 99999)}",
+                started_at=self._now - timedelta(minutes=rng.randint(1, 90)),
+            )
+        return jobs
+
+    # -- users ------------------------------------------------------------
+
+    def get_user(self, login: str) -> UserInfo:
+        if login in self._user_cache:
+            return self._user_cache[login]
+        rng = self._user_seed(login)
+        created = self._now - timedelta(days=rng.randint(400, 5000))
+        updated = self._now - timedelta(days=rng.randint(0, 400))
+        name_parts = login.replace("-", " ").split()
+        name = " ".join(p.capitalize() for p in name_parts) or None
+        info = UserInfo(
+            login=login,
+            name=name,
+            id=1000 + (hash(login) % 9000),
+            type="User",
+            company=rng.choice([None, f"@{self.org}", "Freelance", "Acme Corp"]),
+            email=rng.choice([None, f"{login}@example.com"]),
+            location=rng.choice([None] + _LOCATIONS),
+            bio=rng.choice([
+                None,
+                "Building things with code.",
+                f"{rng.choice(_LANGS)} enthusiast. Opinions my own.",
+                "Coffee in, software out.",
+            ]),
+            blog=rng.choice(["", f"https://{login}.dev"]),
+            public_repos=rng.randint(0, 200),
+            followers=rng.randint(0, 5000),
+            following=rng.randint(0, 500),
+            created_at=created.isoformat(),
+            updated_at=updated.isoformat(),
+            html_url=f"https://github.com/{login}",
+            org_role=self.org_role(login),
+            raw={},
+        )
+        self._user_cache[login] = info
+        return info
+
+    def audit_events(self, login: str, limit: int = 30) -> list[AuditEvent]:
+        rng = random.Random(f"{self.org}/{login}/audit")
+        events = []
+        when = self._now
+        for _ in range(min(limit, rng.randint(5, 30))):
+            when = when - timedelta(hours=rng.randint(1, 200))
+            repo = rng.choice(self._repos)
+            events.append(
+                AuditEvent(
+                    timestamp=when,
+                    action=rng.choice(_ACTIONS),
+                    actor=login,
+                    repo=rng.choice([None, repo.full_name]),
+                    raw={},
+                )
+            )
+        return events
+
+    def recent_commit_repos(self, login: str,
+                            limit: int = 100) -> list[RepoCommitActivity]:
+        rng = random.Random(f"{self.org}/{login}/activity")
+        n = min(limit, rng.randint(1, 8), len(self._repos))
+        chosen = rng.sample(self._repos, n)
+        out = []
+        for repo in chosen:
+            last = self._now - timedelta(days=rng.randint(0, 120),
+                                         hours=rng.randint(0, 23))
+            out.append(
+                RepoCommitActivity(
+                    repo=repo.full_name,
+                    last_commit=last,
+                    count=rng.randint(1, 60),
+                )
+            )
+        out.sort(
+            key=lambda a: a.last_commit or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return out
+
+    def public_keys(self, login: str) -> PublicKeys:
+        rng = random.Random(f"{self.org}/{login}/keys")
+        keys = PublicKeys()
+        for _ in range(rng.randint(0, 3)):
+            blob = rng.getrandbits(2048).to_bytes(256, "big")
+            digest = hashlib.sha256(blob).digest()
+            fp = "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+            keys.ssh.append((rng.choice(["ssh-ed25519", "ssh-rsa"]), fp))
+        for _ in range(rng.randint(0, 2)):
+            key_id = "".join(rng.choice("0123456789ABCDEF") for _ in range(16))
+            keys.gpg.append((key_id, [f"{login}@example.com"]))
+        return keys
+
+    def whoami(self) -> str | None:
+        return "mock-user"
+
+    def user_teams(self, login: str) -> list[str]:
+        rng = random.Random(f"{self.org}/{login}/teams")
+        pool = ["Platform", "Security", "Frontend", "Backend", "SRE", "Data",
+                "Design", "Release Engineering", "Developer Experience"]
+        return sorted(rng.sample(pool, rng.randint(0, 4)))
+
+
+def _seed_from(org: str) -> int:
+    return int(hashlib.sha256(org.encode()).hexdigest(), 16) % (2**32)

@@ -7,7 +7,7 @@ import os
 import sys
 
 from .api import resolve_token
-from .app import GhReconApp
+from .ui import GhReconApp
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,7 +26,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="GitHub token. Defaults to GH_TOKEN/GITHUB_TOKEN env or `gh auth token`.",
     )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Run against synthetic data generated at start time (no token/network).",
+    )
     args = parser.parse_args(argv)
+
+    if args.mock:
+        org = args.org or "mock-org"
+        app = GhReconApp(org=org, token=None, mock=True)
+        app.run()
+        return 0
 
     token = resolve_token(args.token)
     if not token:
