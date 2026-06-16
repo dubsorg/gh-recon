@@ -1,18 +1,32 @@
 # gh-recon
 
-A terminal UI (TUI) for GitHub organization recon, built with [Textual](https://textual.textualize.io/).
+A [`gh`](https://cli.github.com/) CLI extension: a terminal UI (TUI) for GitHub
+organization recon, built with [Textual](https://textual.textualize.io/).
 
 Scoped to a single organization, it provides two commands:
 
 - **Search users** — filter the org's members by login.
 - **Get user info** — full profile, org-membership role, and **recent audit-log events** for that user within the org.
 
-## Setup
+## Install
 
 ```bash
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
+gh extension install dubsorg/gh-recon
 ```
+
+Or, for local development from a clone:
+
+```bash
+gh extension install .
+```
+
+This is a **script extension**: it runs the bundled Textual app, so each machine
+needs **Python 3.9+** (with the `venv` module). On first run, `gh recon` creates a
+private virtualenv next to the extension and installs its dependencies
+automatically — no manual setup. Override the interpreter with `GH_RECON_PYTHON`.
+
+> Script extensions don't need a build manifest — `gh` simply runs the executable
+> `gh-recon` at the repo root, which bootstraps and launches the app.
 
 ## Auth
 
@@ -27,14 +41,15 @@ A token is resolved in this order: `--token`, `GH_TOKEN`, `GITHUB_TOKEN`, then `
 ## Run
 
 ```bash
-./run.sh ORG            # e.g. ./run.sh my-company
+gh recon ORG               # e.g. gh recon my-company
 # or
-GH_RECON_ORG=my-company ./run.sh
-# or
-./.venv/bin/python -m gh_recon ORG
+GH_RECON_ORG=my-company gh recon
 ```
 
 If no org is supplied, the app prompts for one on startup.
+
+For local development without installing the extension, `./run.sh ORG` invokes the
+same entrypoint (`./gh-recon`) directly.
 
 ## Keys
 
@@ -56,10 +71,12 @@ If no org is supplied, the app prompts for one on startup.
 ## Layout
 
 ```
+gh-recon          # executable extension entrypoint (gh runs this as `gh recon`)
+requirements.txt  # Python deps installed into the auto-created venv
 gh_recon/
-  api.py        # requests-based GitHub client (members, user, audit log)
-  app.py        # Textual app: MainScreen (search) + UserDetailScreen
-  __main__.py   # CLI entry point
+  api.py          # requests-based GitHub client (members, user, audit log)
+  app.py          # Textual app: MainScreen (search) + UserDetailScreen
+  __main__.py     # CLI entry point
 ```
 
 ## Notes
