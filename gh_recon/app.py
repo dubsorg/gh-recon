@@ -87,6 +87,7 @@ class UserDetailScreen(Screen):
                 yield Static(f"[b]@{self.login}[/b]", id="profile-title")
                 yield Static("loading…", id="profile-fields")
                 yield Static("", id="teams")
+                yield Static("", id="languages")
             with Vertical(id="events-pane"):
                 yield Label("[b]Recent commits (repos)[/b]")
                 yield Static("", id="commits-status")
@@ -128,11 +129,17 @@ class UserDetailScreen(Screen):
             self.app.call_from_thread(self._render_teams, teams, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_teams, None, str(exc))
+        repos = []
         try:
             repos = self.client.recent_commit_repos(self.login)
             self.app.call_from_thread(self._render_commits, repos, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_commits, [], str(exc))
+        try:
+            langs = self.client.language_bytes([r.repo for r in repos])
+            self.app.call_from_thread(self._render_languages, langs, None)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_languages, [], str(exc))
         try:
             events = self.client.audit_events(self.login)
             self.app.call_from_thread(self._render_events, events, None)
@@ -180,6 +187,23 @@ class UserDetailScreen(Screen):
             return
         listed = "\n".join(f"  • {t}" for t in teams)
         widget.update(f"\n[$text-muted]Teams ({len(teams)})[/]\n{listed}")
+
+    def _render_languages(self, langs, error: str | None) -> None:
+        widget = self.query_one("#languages", Static)
+        if error is not None:
+            widget.update("\n[$text-muted]Languages[/]    [yellow]unavailable[/yellow]")
+            return
+        if not langs:
+            widget.update("\n[$text-muted]Languages[/]    [dim]none[/dim]")
+            return
+        total = sum(b for _, b in langs) or 1
+        lines = ["\n[$text-muted]Languages (by repo bytes)[/]"]
+        for name, b in langs[:8]:
+            pct = b / total * 100
+            filled = round(pct / 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            lines.append(f"  {name[:12]:<12} {bar} {pct:5.1f}%")
+        widget.update("\n".join(lines))
 
     def _render_commits(self, repos, error: str | None) -> None:
         status = self.query_one("#commits-status", Static)

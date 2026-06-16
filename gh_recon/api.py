@@ -257,6 +257,20 @@ class GitHubClient:
             reverse=True,
         )
 
+    def language_bytes(
+        self, repo_full_names: list[str], max_repos: int = 25
+    ) -> list[tuple[str, int]]:
+        """Aggregate language byte counts across the given repos, desc by bytes."""
+        totals: dict[str, int] = {}
+        for full in repo_full_names[:max_repos]:
+            try:
+                data = self._get(f"{API_ROOT}/repos/{full}/languages").json()
+            except GitHubError:
+                continue  # repo gone or inaccessible — skip
+            for lang, count in data.items():
+                totals[lang] = totals.get(lang, 0) + int(count)
+        return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
     def whoami(self) -> str | None:
         try:
             return self._get(f"{API_ROOT}/user").json().get("login")
