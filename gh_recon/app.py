@@ -215,9 +215,16 @@ class UserDetailScreen(Screen):
         if not repos:
             status.update("[dim]No recently authored commits found in this org.[/dim]")
             return
-        status.update(f"[green]{len(repos)} repo(s)[/green]")
+        # repos is sorted by last commit desc, so max() picks the highest commit
+        # count, breaking ties toward the most recently active repo.
+        top = max(repos, key=lambda r: r.count)
+        status.update(
+            f"[green]{len(repos)} repo(s)[/green] · most active: "
+            f"[b]{top.repo}[/b] ([b]{top.count}[/b] commits)"
+        )
         for r in repos:
-            table.add_row(r.repo, _fmt_dt(r.last_commit), str(r.count))
+            marker = "★ " if r is top else ""
+            table.add_row(f"{marker}{r.repo}", _fmt_dt(r.last_commit), str(r.count))
 
     def _render_events(self, events: list[AuditEvent], error: str | None) -> None:
         status = self.query_one("#events-status", Static)
