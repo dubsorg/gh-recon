@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -80,6 +82,12 @@ class RepoCommitActivity:
     repo: str
     last_commit: datetime | None
     count: int
+
+
+@dataclass
+class PublicKeys:
+    ssh: list[tuple[str, str]] = field(default_factory=list)  # (type, fingerprint)
+    gpg: list[tuple[str, list[str]]] = field(default_factory=list)  # (key_id, emails)
 
 
 @dataclass
@@ -271,6 +279,17 @@ class GitHubClient:
                 totals[lang] = totals.get(lang, 0) + int(count)
         return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
 
+    def public_keys(self, login: str) -> PublicKeys:
+        """Public SSH and GPG keys for a user (both are public, no special scope)."""
+        keys = PublicKeys()
+        for k in self._get(f"{API_ROOT}/users/{login}/keys").json():
+            keys.ssh.append(_ssh_fingerprint(k.get("key", "")))
+        for g in self._get(f"{API_ROOT}/users/{login}/gpg_keys").json():
+            emails = [e["email"] for e in (g.get("emails") or []) if e.get("email")]
+            key_id = g.get("key_id") or g.get("raw_key", "")[:16]
+            keys.gpg.append((key_id, emails))
+        return keys
+
     def whoami(self) -> str | None:
         try:
             return self._get(f"{API_ROOT}/user").json().get("login")
@@ -325,6 +344,20 @@ class GitHubClient:
             else:
                 break
         return teams
+
+
+def _ssh_fingerprint(keystr: str) -> tuple[str, str]:
+    """Return (key_type, 'SHA256:...') for an OpenSSH public key string."""
+    parts = keystr.split()
+    if len(parts) < 2:
+        return ("?", "")
+    ktype = parts[0]
+    try:
+        blob = base64.b64decode(parts[1])
+        digest = hashlib.sha256(blob).digest()
+        return (ktype, "SHA256:" + base64.b64encode(digest).decode().rstrip("="))
+    except (ValueError, base64.binascii.Error):
+        return (ktype, "")
 
 
 def _parse_iso(value: str | None) -> datetime | None:

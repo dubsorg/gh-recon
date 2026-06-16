@@ -88,6 +88,7 @@ class UserDetailScreen(Screen):
                 yield Static("loading…", id="profile-fields")
                 yield Static("", id="teams")
                 yield Static("", id="languages")
+                yield Static("", id="keys")
             with Vertical(id="events-pane"):
                 yield Label("[b]Recent commits (repos)[/b]")
                 yield Static("", id="commits-status")
@@ -129,6 +130,11 @@ class UserDetailScreen(Screen):
             self.app.call_from_thread(self._render_teams, teams, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_teams, None, str(exc))
+        try:
+            keys = self.client.public_keys(self.login)
+            self.app.call_from_thread(self._render_keys, keys, None)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_keys, None, str(exc))
         repos = []
         try:
             repos = self.client.recent_commit_repos(self.login)
@@ -187,6 +193,27 @@ class UserDetailScreen(Screen):
             return
         listed = "\n".join(f"  • {t}" for t in teams)
         widget.update(f"\n[$text-muted]Teams ({len(teams)})[/]\n{listed}")
+
+    def _render_keys(self, keys, error: str | None) -> None:
+        widget = self.query_one("#keys", Static)
+        if error is not None:
+            widget.update("\n[$text-muted]Public keys[/]  [yellow]unavailable[/yellow]")
+            return
+        lines = ["\n[$text-muted]Public keys[/]"]
+        if keys.ssh:
+            lines.append(f"  SSH ({len(keys.ssh)}):")
+            for ktype, fp in keys.ssh:
+                lines.append(f"    {ktype}  {fp}")
+        else:
+            lines.append("  SSH: [dim]none[/dim]")
+        if keys.gpg:
+            lines.append(f"  GPG ({len(keys.gpg)}):")
+            for key_id, emails in keys.gpg:
+                suffix = f"  {', '.join(emails)}" if emails else ""
+                lines.append(f"    {key_id}{suffix}")
+        else:
+            lines.append("  GPG: [dim]none[/dim]")
+        widget.update("\n".join(lines))
 
     def _render_languages(self, langs, error: str | None) -> None:
         widget = self.query_one("#languages", Static)
