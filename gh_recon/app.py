@@ -86,6 +86,7 @@ class UserDetailScreen(Screen):
             with VerticalScroll(id="profile"):
                 yield Static(f"[b]@{self.login}[/b]", id="profile-title")
                 yield Static("loading…", id="profile-fields")
+                yield Static("", id="teams")
             with Vertical(id="events-pane"):
                 yield Label("[b]Recent audit-log events[/b]")
                 yield Static("", id="events-status")
@@ -115,6 +116,11 @@ class UserDetailScreen(Screen):
             self.app.call_from_thread(self._show_profile_error, str(exc))
             return
         self.app.call_from_thread(self._render_profile, info)
+        try:
+            teams = self.client.user_teams(self.login)
+            self.app.call_from_thread(self._render_teams, teams, None)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_teams, None, str(exc))
         try:
             events = self.client.audit_events(self.login)
             self.app.call_from_thread(self._render_events, events, None)
@@ -150,6 +156,18 @@ class UserDetailScreen(Screen):
             lines.append("")
             lines.append(f"[i]{info.bio}[/i]")
         self.query_one("#profile-fields", Static).update("\n".join(lines))
+
+    def _render_teams(self, teams: list[str] | None, error: str | None) -> None:
+        widget = self.query_one("#teams", Static)
+        if error is not None:
+            widget.update(f"\n[$text-muted]Teams[/]        [yellow]unavailable[/yellow]")
+            return
+        teams = teams or []
+        if not teams:
+            widget.update(f"\n[$text-muted]Teams[/]        [dim]none[/dim]")
+            return
+        listed = "\n".join(f"  • {t}" for t in teams)
+        widget.update(f"\n[$text-muted]Teams ({len(teams)})[/]\n{listed}")
 
     def _render_events(self, events: list[AuditEvent], error: str | None) -> None:
         status = self.query_one("#events-status", Static)

@@ -220,6 +220,55 @@ class GitHubClient:
         except GitHubError:
             return None
 
+    # -- teams -------------------------------------------------------------
+    def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        try:
+            resp = self.session.post(
+                f"{API_ROOT}/graphql",
+                json={"query": query, "variables": variables},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise GitHubError(f"network error: {exc}") from exc
+        if resp.status_code == 401:
+            raise GitHubError("unauthorized — token missing or invalid", 401)
+        if resp.status_code >= 400:
+            msg = resp.json().get("message", resp.reason) if _is_json(resp) else resp.reason
+            raise GitHubError(f"HTTP {resp.status_code}: {msg}", resp.status_code)
+        body = resp.json()
+        errors = body.get("errors")
+        if errors:
+            raise GitHubError(errors[0].get("message", "graphql error"))
+        return body.get("data") or {}
+
+    def user_teams(self, login: str) -> list[str]:
+        """Org teams the given user belongs to (requires read:org)."""
+        query = """
+        query($org: String!, $user: String!, $cursor: String) {
+          organization(login: $org) {
+            teams(first: 100, userLogins: [$user], after: $cursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes { name slug }
+            }
+          }
+        }
+        """
+        teams: list[str] = []
+        cursor: str | None = None
+        while True:
+            data = self._graphql(query, {"org": self.org, "user": login, "cursor": cursor})
+            org = data.get("organization")
+            if not org:
+                break
+            conn = org["teams"]
+            teams.extend(n["name"] for n in conn["nodes"])
+            page = conn["pageInfo"]
+            if page["hasNextPage"]:
+                cursor = page["endCursor"]
+            else:
+                break
+        return teams
+
 
 def _is_json(resp: requests.Response) -> bool:
     return resp.headers.get("Content-Type", "").startswith("application/json")
