@@ -7,6 +7,7 @@ Scoped to a single organization, it provides two commands:
 
 - **Search users** — filter the org's members by login.
 - **Get user info** — full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
+- **Repositories** (press `R` from the member list) — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, and **recent commits**.
 
 ## Install
 
@@ -58,8 +59,18 @@ same entrypoint (`./gh-recon`) directly.
 | --- | --- |
 | `/` | Focus the filter box |
 | `Enter` | View selected user |
+| `R` | Repositories |
 | `r` | Refresh members |
 | `q` | Quit |
+
+**Repository list** / **Repo detail**
+| Key | Action |
+| --- | --- |
+| `/` | Focus the filter box (list) |
+| `Enter` | View selected repo (list) |
+| `o` | Open repo on github.com (detail) |
+| `r` | Refresh |
+| `Esc` | Back |
 
 **User detail**
 | Key | Action |
@@ -74,8 +85,8 @@ same entrypoint (`./gh-recon`) directly.
 gh-recon          # executable extension entrypoint (gh runs this as `gh recon`)
 requirements.txt  # Python deps installed into the auto-created venv
 gh_recon/
-  api.py          # requests-based GitHub client (members, user, audit log)
-  app.py          # Textual app: MainScreen (search) + UserDetailScreen
+  api.py          # requests-based GitHub client (members, user, repos, audit log)
+  app.py          # Textual app: members, user-detail, repositories, repo-detail screens
   __main__.py     # CLI entry point
 ```
 
