@@ -6,7 +6,7 @@ organization recon, built with [Textual](https://textual.textualize.io/).
 Scoped to a single organization, it provides two commands:
 
 - **Search users** — filter the org's members by login.
-- **Get user info** — full profile, org-membership role, **team memberships**, and **recent audit-log events** for that user within the org.
+- **Get user info** — full profile, org-membership role, **team memberships**, **repos recently committed to**, and **recent audit-log events** for that user within the org.
 
 ## Install
 

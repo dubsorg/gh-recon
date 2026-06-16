@@ -76,6 +76,13 @@ class UserInfo:
 
 
 @dataclass
+class RepoCommitActivity:
+    repo: str
+    last_commit: datetime | None
+    count: int
+
+
+@dataclass
 class AuditEvent:
     timestamp: datetime | None
     action: str
@@ -214,6 +221,42 @@ class GitHubClient:
             )
         return events
 
+    def recent_commit_repos(
+        self, login: str, limit: int = 100
+    ) -> list[RepoCommitActivity]:
+        """Repos in the org the user has recently authored commits to.
+
+        Uses the commit search API (default-branch commits, may lag indexing).
+        """
+        params = {
+            "q": f"author:{login} org:{self.org}",
+            "sort": "author-date",
+            "order": "desc",
+            "per_page": min(limit, 100),
+        }
+        resp = self._get(f"{API_ROOT}/search/commits", params=params)
+        agg: dict[str, RepoCommitActivity] = {}
+        for item in resp.json().get("items", []):
+            repo = (item.get("repository") or {}).get("full_name")
+            if not repo:
+                continue
+            date_str = ((item.get("commit") or {}).get("author") or {}).get("date")
+            dt = _parse_iso(date_str)
+            if dt is not None:
+                dt = dt.astimezone(timezone.utc)
+            entry = agg.get(repo)
+            if entry is None:
+                agg[repo] = RepoCommitActivity(repo=repo, last_commit=dt, count=1)
+            else:
+                entry.count += 1
+                if dt and (entry.last_commit is None or dt > entry.last_commit):
+                    entry.last_commit = dt
+        return sorted(
+            agg.values(),
+            key=lambda a: a.last_commit or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+
     def whoami(self) -> str | None:
         try:
             return self._get(f"{API_ROOT}/user").json().get("login")
@@ -268,6 +311,15 @@ class GitHubClient:
             else:
                 break
         return teams
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _is_json(resp: requests.Response) -> bool:

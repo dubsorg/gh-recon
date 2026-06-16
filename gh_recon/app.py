@@ -88,6 +88,13 @@ class UserDetailScreen(Screen):
                 yield Static("loading…", id="profile-fields")
                 yield Static("", id="teams")
             with Vertical(id="events-pane"):
+                yield Label("[b]Recent commits (repos)[/b]")
+                yield Static("", id="commits-status")
+                commits = DataTable(
+                    id="commits-table", zebra_stripes=True, cursor_type="row"
+                )
+                commits.add_columns("Repo", "Last commit (UTC)", "Commits")
+                yield commits
                 yield Label("[b]Recent audit-log events[/b]")
                 yield Static("", id="events-status")
                 table = DataTable(id="events-table", zebra_stripes=True, cursor_type="row")
@@ -121,6 +128,11 @@ class UserDetailScreen(Screen):
             self.app.call_from_thread(self._render_teams, teams, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_teams, None, str(exc))
+        try:
+            repos = self.client.recent_commit_repos(self.login)
+            self.app.call_from_thread(self._render_commits, repos, None)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_commits, [], str(exc))
         try:
             events = self.client.audit_events(self.login)
             self.app.call_from_thread(self._render_events, events, None)
@@ -168,6 +180,20 @@ class UserDetailScreen(Screen):
             return
         listed = "\n".join(f"  • {t}" for t in teams)
         widget.update(f"\n[$text-muted]Teams ({len(teams)})[/]\n{listed}")
+
+    def _render_commits(self, repos, error: str | None) -> None:
+        status = self.query_one("#commits-status", Static)
+        table = self.query_one("#commits-table", DataTable)
+        table.clear()
+        if error:
+            status.update(f"[yellow]Commit search unavailable: {error}[/yellow]")
+            return
+        if not repos:
+            status.update("[dim]No recently authored commits found in this org.[/dim]")
+            return
+        status.update(f"[green]{len(repos)} repo(s)[/green]")
+        for r in repos:
+            table.add_row(r.repo, _fmt_dt(r.last_commit), str(r.count))
 
     def _render_events(self, events: list[AuditEvent], error: str | None) -> None:
         status = self.query_one("#events-status", Static)
