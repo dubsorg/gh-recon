@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# gh-recon — GitHub organization recon TUI, packaged as a gh CLI extension.
+#
+# Installed as `gh recon`. On first run it bootstraps a private virtualenv
+# next to this script and installs its Python dependencies (Textual, requests).
+#
+set -euo pipefail
+
+# Resolve the real directory of this script, following symlinks (gh symlinks
+# local extensions into ~/.local/share/gh/extensions/gh-recon/).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+PY="${GH_RECON_PYTHON:-python3}"
+VENV="$DIR/.venv"
+VENV_PY="$VENV/bin/python"
+
+if ! command -v "$PY" >/dev/null 2>&1; then
+  echo "gh-recon: '$PY' not found. Install Python 3.9+ (or set GH_RECON_PYTHON)." >&2
+  exit 1
+fi
+
+needs_install() {
+  [ ! -x "$VENV_PY" ] || ! "$VENV_PY" -c "import textual, requests" >/dev/null 2>&1
+}
+
+if needs_install; then
+  echo "gh-recon: first-run setup — creating venv and installing dependencies…" >&2
+  "$PY" -m venv "$VENV" >&2
+  "$VENV_PY" -m pip install --quiet --upgrade pip >&2
+  "$VENV_PY" -m pip install --quiet -r "$DIR/requirements.txt" >&2
+  echo "gh-recon: setup complete." >&2
+fi
+
+# Token: the app already falls back to `gh auth token`, but gh exports GH_TOKEN
+# to extensions when available — pass it through for the common case.
+PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" exec "$VENV_PY" -m gh_recon "$@"
