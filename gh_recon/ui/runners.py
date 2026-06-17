@@ -46,9 +46,7 @@ class RunnersScreen(Screen):
 
     @work(exclusive=True, thread=True)
     def load_runners(self) -> None:
-        self.app.call_from_thread(
-            self.query_one("#runner-status", Static).update, "[dim]loading runners…[/dim]"
-        )
+        self.app.call_from_thread(self._set_loading, True)
         try:
             runners = self.client.list_runners()
         except GitHubError as exc:
@@ -63,7 +61,11 @@ class RunnersScreen(Screen):
                 jobs = {}
             self.app.call_from_thread(self._render_runners, runners, jobs)
 
+    def _set_loading(self, value: bool) -> None:
+        self.query_one("#runners-table", DataTable).loading = value
+
     def _show_error(self, msg: str) -> None:
+        self.query_one("#runners-table", DataTable).loading = False
         self.query_one("#runner-status", Static).update(
             f"[yellow]Runners unavailable: {msg}[/yellow]\n"
             "[dim]Requires an org-admin token with admin:org (or fine-grained "
@@ -74,6 +76,7 @@ class RunnersScreen(Screen):
         self, runners: list[Runner], jobs: dict[str, RunnerJob]
     ) -> None:
         table = self.query_one("#runners-table", DataTable)
+        table.loading = False
         table.clear()
         online = sum(1 for r in runners if r.status == "online")
         busy = sum(1 for r in runners if r.busy)

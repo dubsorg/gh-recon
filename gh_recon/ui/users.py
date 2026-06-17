@@ -10,8 +10,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Label, Static
 
 from ..api import GitHubClient, GitHubError
-from ..models import AuditEvent, UserInfo
-from .common import _fmt_dt, _language_chart
+from ..models import AuditEvent, Page, UserInfo
+from .common import Paginator, _fmt_dt, _language_chart
 from .repos import RepoDetailScreen
 
 
@@ -20,6 +20,8 @@ class UserDetailScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
+        Binding("n", "next_page", "Audit next"),
+        Binding("p", "prev_page", "Audit prev"),
         Binding("r", "refresh", "Refresh"),
         Binding("o", "open_browser", "Open on GitHub"),
     ]
@@ -39,6 +41,7 @@ class UserDetailScreen(Screen):
         self.client = client
         self.login = login
         self._html_url = f"https://github.com/{login}"
+        self._audit = Paginator()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -67,9 +70,22 @@ class UserDetailScreen(Screen):
     def on_mount(self) -> None:
         self.sub_title = f"{self.client.org} / {self.login}"
         self.load_user()
+        self.load_audit()
 
     def action_refresh(self) -> None:
+        self._audit.reset()
         self.load_user()
+        self.load_audit()
+
+    def action_next_page(self) -> None:
+        if self._audit.has_next:
+            self._audit.next()
+            self.load_audit()
+
+    def action_prev_page(self) -> None:
+        if self._audit.has_prev:
+            self._audit.prev()
+            self.load_audit()
 
     def action_open_browser(self) -> None:
         import webbrowser
@@ -77,11 +93,16 @@ class UserDetailScreen(Screen):
         webbrowser.open(self._html_url)
         self.app.notify(f"Opening {self._html_url}")
 
+    def _set_loading(self, selector: str, value: bool) -> None:
+        self.query_one(selector, DataTable).loading = value
+
     @work(exclusive=True, thread=True)
     def load_user(self) -> None:
+        self.app.call_from_thread(self._set_loading, "#commits-table", True)
         try:
             info = self.client.get_user(self.login)
         except GitHubError as exc:
+            self.app.call_from_thread(self._set_loading, "#commits-table", False)
             self.app.call_from_thread(self._show_profile_error, str(exc))
             return
         self.app.call_from_thread(self._render_profile, info)
@@ -106,11 +127,15 @@ class UserDetailScreen(Screen):
             self.app.call_from_thread(self._render_languages, langs, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_languages, [], str(exc))
+
+    @work(exclusive=True, thread=True, group="audit")
+    def load_audit(self) -> None:
+        self.app.call_from_thread(self._set_loading, "#events-table", True)
         try:
-            events = self.client.audit_events(self.login)
-            self.app.call_from_thread(self._render_events, events, None)
+            page = self.client.audit_events(self.login, cursor=self._audit.cursor)
+            self.app.call_from_thread(self._render_events, page, None)
         except GitHubError as exc:
-            self.app.call_from_thread(self._render_events, [], str(exc))
+            self.app.call_from_thread(self._render_events, None, str(exc))
 
     def _show_profile_error(self, msg: str) -> None:
         self.query_one("#profile-fields", Static).update(f"[red]{msg}[/red]")
@@ -190,6 +215,7 @@ class UserDetailScreen(Screen):
     def _render_commits(self, repos, error: str | None) -> None:
         status = self.query_one("#commits-status", Static)
         table = self.query_one("#commits-table", DataTable)
+        table.loading = False
         table.clear()
         if error:
             status.update(f"[yellow]Commit search unavailable: {error}[/yellow]")
@@ -220,9 +246,10 @@ class UserDetailScreen(Screen):
         if name:
             self.app.push_screen(RepoDetailScreen(self.client, name))
 
-    def _render_events(self, events: list[AuditEvent], error: str | None) -> None:
+    def _render_events(self, page: Page | None, error: str | None) -> None:
         status = self.query_one("#events-status", Static)
         table = self.query_one("#events-table", DataTable)
+        table.loading = False
         table.clear()
         if error:
             status.update(
@@ -231,9 +258,20 @@ class UserDetailScreen(Screen):
                 "(GitHub Enterprise Cloud).[/dim]"
             )
             return
-        if not events:
+        self._audit.record(page)
+        events: list[AuditEvent] = page.items
+        if not events and not self._audit.has_prev:
             status.update("[dim]No audit-log events found for this actor.[/dim]")
             return
-        status.update(f"[green]{len(events)} event(s)[/green]")
+        nav = []
+        if self._audit.has_prev:
+            nav.append("p prev")
+        if self._audit.has_next:
+            nav.append("n next")
+        nav_hint = f" · {', '.join(nav)}" if nav else ""
+        status.update(
+            f"[green]{len(events)} event(s)[/green] · page "
+            f"{self._audit.page_number}{nav_hint}"
+        )
         for e in events:
             table.add_row(_fmt_dt(e.timestamp), e.action, e.repo or "—")

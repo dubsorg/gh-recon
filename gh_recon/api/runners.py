@@ -89,7 +89,7 @@ class RunnersMixin:
         Best-effort: a job on a repo outside the scan window won't be found.
         """
         jobs_by_runner: dict[str, RunnerJob] = {}
-        for repo in self.list_repos(max_results=max_repos):
+        for repo in self._list_all_repos(max_results=max_repos):
             try:
                 runs = (
                     self._get(

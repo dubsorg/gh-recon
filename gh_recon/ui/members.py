@@ -10,6 +10,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static
 
 from ..api import GitHubClient, GitHubError
+from ..models import Page
+from .common import Paginator
 from .users import UserDetailScreen
 
 
@@ -18,6 +20,8 @@ class MembersScreen(Screen):
 
     BINDINGS = [
         Binding("slash", "focus_search", "Search"),
+        Binding("n", "next_page", "Next page"),
+        Binding("p", "prev_page", "Prev page"),
         Binding("r", "refresh", "Refresh"),
         Binding("enter", "open_selected", "View user", show=False),
         Binding("escape", "app.pop_screen", "Back"),
@@ -33,7 +37,8 @@ class MembersScreen(Screen):
     def __init__(self, client: GitHubClient) -> None:
         super().__init__()
         self.client = client
-        self._all_loaded = False
+        self._query = ""
+        self._paginator = Paginator()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -50,17 +55,29 @@ class MembersScreen(Screen):
 
     def on_mount(self) -> None:
         self.sub_title = f"org: {self.client.org} / members"
-        self.load_members("")
+        self.load_members()
 
     def action_focus_search(self) -> None:
         self.query_one("#search", Input).focus()
 
     def action_refresh(self) -> None:
-        self.load_members(self.query_one("#search", Input).value.strip())
+        self.load_members()
+
+    def action_next_page(self) -> None:
+        if self._paginator.has_next:
+            self._paginator.next()
+            self.load_members()
+
+    def action_prev_page(self) -> None:
+        if self._paginator.has_prev:
+            self._paginator.prev()
+            self.load_members()
 
     @on(Input.Submitted, "#search")
     def _on_search(self, event: Input.Submitted) -> None:
-        self.load_members(event.value.strip())
+        self._query = event.value.strip()
+        self._paginator.reset()  # new query starts at page 1
+        self.load_members()
 
     @on(DataTable.RowSelected, "#members-table")
     def _on_row(self, event: DataTable.RowSelected) -> None:
@@ -77,23 +94,30 @@ class MembersScreen(Screen):
             self.app.push_screen(UserDetailScreen(self.client, login))
 
     @work(exclusive=True, thread=True)
-    def load_members(self, query: str) -> None:
-        self.app.call_from_thread(
-            self.query_one("#status", Static).update, "[dim]loading members…[/dim]"
-        )
+    def load_members(self) -> None:
+        self.app.call_from_thread(self._set_loading, True)
         try:
-            members = self.client.search_members(query)
-        except GitHubError as exc:
-            self.app.call_from_thread(
-                self.query_one("#status", Static).update, f"[red]{exc}[/red]"
+            page = self.client.search_members(
+                self._query, cursor=self._paginator.cursor
             )
+        except GitHubError as exc:
+            self.app.call_from_thread(self._on_error, str(exc))
             return
-        self.app.call_from_thread(self._render_members, members, query)
+        self.app.call_from_thread(self._render_members, page)
 
-    def _render_members(self, members, query: str) -> None:
+    def _set_loading(self, value: bool) -> None:
+        self.query_one("#members-table", DataTable).loading = value
+
+    def _on_error(self, msg: str) -> None:
+        self._set_loading(False)
+        self.query_one("#status", Static).update(f"[red]{msg}[/red]")
+
+    def _render_members(self, page: Page) -> None:
+        self._paginator.record(page)
         table = self.query_one("#members-table", DataTable)
+        table.loading = False
         table.clear()
-        for m in members:
+        for m in page.items:
             table.add_row(
                 m.login,
                 m.type,
@@ -101,10 +125,21 @@ class MembersScreen(Screen):
                 str(m.id),
                 key=m.login,
             )
-        scope = f" matching '{query}'" if query else ""
-        self.query_one("#status", Static).update(
-            f"[green]{len(members)}[/green] member(s){scope} — "
-            "Enter to view, / to filter, r to refresh, Esc to go back"
-        )
-        if members:
+        self.query_one("#status", Static).update(self._status_line(page))
+        if page.items:
             table.focus()
+
+    def _status_line(self, page: Page) -> str:
+        scope = f" matching '{self._query}'" if self._query else ""
+        total = f" of {page.total}" if page.total is not None else ""
+        nav = []
+        if self._paginator.has_prev:
+            nav.append("p prev")
+        if self._paginator.has_next:
+            nav.append("n next")
+        nav_hint = f" · {', '.join(nav)}" if nav else ""
+        return (
+            f"[green]{len(page.items)}[/green] member(s){total}{scope} · "
+            f"page {self._paginator.page_number}{nav_hint} — "
+            "Enter to view, / to filter, Esc to go back"
+        )

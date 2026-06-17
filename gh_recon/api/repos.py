@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models import CommitInfo, Repo
-from .base import API_ROOT, GitHubError, _next_link, _parse_iso, _to_utc
+from ..models import CommitInfo, Page, Repo
+from .base import (
+    API_ROOT,
+    DEFAULT_PAGE_SIZE,
+    GitHubError,
+    _next_link,
+    _paginate_list,
+    _parse_iso,
+    _to_utc,
+)
 
 
 class ReposMixin:
@@ -31,8 +39,21 @@ class ReposMixin:
             created_at=_to_utc(_parse_iso(r.get("created_at"))),
         )
 
-    def list_repos(self, max_results: int = 500) -> list[Repo]:
-        """List org repositories, most recently pushed first."""
+    def list_repos(
+        self, cursor: int | None = None, per_page: int = DEFAULT_PAGE_SIZE
+    ) -> Page[Repo]:
+        """One page of org repositories, most recently pushed first."""
+        page = cursor or 1
+        resp = self._get(
+            f"{API_ROOT}/orgs/{self.org}/repos",
+            params={"per_page": per_page, "page": page, "sort": "pushed"},
+        )
+        repos = [self._repo_from_json(r) for r in resp.json()]
+        has_next = _next_link(resp) is not None
+        return Page(items=repos, next_cursor=(page + 1) if has_next else None)
+
+    def _list_all_repos(self, max_results: int = 500) -> list[Repo]:
+        """Accumulate every org repo (for client-side search and run scans)."""
         repos: list[Repo] = []
         url: str | None = f"{API_ROOT}/orgs/{self.org}/repos"
         params: dict[str, Any] | None = {"per_page": 100, "sort": "pushed"}
@@ -43,17 +64,26 @@ class ReposMixin:
             params = None
         return repos
 
-    def search_repos(self, query: str, max_results: int = 500) -> list[Repo]:
-        """Filter org repos by name/description substring."""
-        repos = self.list_repos(max_results=max_results)
+    def search_repos(
+        self,
+        query: str,
+        cursor: int | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[Repo]:
+        """Filter org repos by name/description substring, one page at a time.
+
+        With no query this is a plain paged listing; a query lists all repos and
+        filters client-side (no org-scoped repo search endpoint), then slices.
+        """
         if not query:
-            return repos
+            return self.list_repos(cursor=cursor, per_page=per_page)
         q = query.lower()
-        return [
+        matches = [
             r
-            for r in repos
+            for r in self._list_all_repos()
             if q in r.name.lower() or (r.description and q in r.description.lower())
         ]
+        return _paginate_list(matches, cursor or 1, per_page)
 
     def _repo_path(self, name: str) -> str:
         return name if "/" in name else f"{self.org}/{name}"

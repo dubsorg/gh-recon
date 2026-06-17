@@ -8,8 +8,11 @@ from typing import Any
 
 import requests
 
+from ..models import Page
+
 API_ROOT = "https://api.github.com"
 USER_AGENT = "gh-recon-tui"
+DEFAULT_PAGE_SIZE = 20
 
 
 class GitHubError(RuntimeError):
@@ -118,6 +121,18 @@ def _to_utc(dt: datetime | None) -> datetime | None:
 
 def _is_json(resp: requests.Response) -> bool:
     return resp.headers.get("Content-Type", "").startswith("application/json")
+
+
+def _paginate_list(items: list, page: int, per_page: int) -> Page:
+    """Slice an in-memory list into a :class:`Page` (for client-side filtering)."""
+    start = (page - 1) * per_page
+    chunk = items[start : start + per_page]
+    has_next = start + per_page < len(items)
+    return Page(
+        items=chunk,
+        next_cursor=(page + 1) if has_next else None,
+        total=len(items),
+    )
 
 
 def _next_link(resp: requests.Response) -> str | None:
