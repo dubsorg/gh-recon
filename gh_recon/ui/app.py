@@ -6,10 +6,34 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import Input, Label
 
 from ..api import GitHubClient, MockClient
 from .home import HomeScreen
+
+# A neon "recon" terminal palette — green/cyan on near-black.
+RECON_THEME = Theme(
+    name="recon",
+    primary="#39ff14",
+    secondary="#00e5ff",
+    accent="#39ff14",
+    foreground="#c8f7d0",
+    background="#06090a",
+    surface="#0c1311",
+    panel="#13201a",
+    success="#39ff14",
+    warning="#ffd166",
+    error="#ff5370",
+    dark=True,
+    variables={
+        # The selected/highlighted row sits on the bright-green cursor; force a
+        # near-black foreground so it stays readable (the default "auto" picks
+        # white against the dark base, which washes out on green).
+        "block-cursor-foreground": "#06090a",
+        "block-cursor-text-style": "bold",
+    },
+)
 
 
 class OrgPromptScreen(ModalScreen[str]):
@@ -49,6 +73,8 @@ class GhReconApp(App):
         self._mock = mock
 
     def on_mount(self) -> None:
+        self.register_theme(RECON_THEME)
+        self.theme = "recon"
         if self._org:
             self._start(self._org)
         else:

@@ -4,7 +4,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
+
+
+@dataclass
+class Page(Generic[T]):
+    """One page of a larger list.
+
+    ``next_cursor`` is an opaque token to pass back to the same client method to
+    fetch the following page (a page number for REST list endpoints, a Link URL
+    for the audit log, a slice index for client-side filtered lists). It is
+    ``None`` when this is the last page. ``total`` is the full match count when
+    known (client-side filtered lists), else ``None``.
+    """
+
+    items: list[T]
+    next_cursor: Any = None
+    total: int | None = None
 
 
 @dataclass

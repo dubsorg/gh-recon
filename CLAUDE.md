@@ -32,7 +32,7 @@ gh_recon/
     users.py      #   UserDetailScreen
     repos.py      #   RepositoriesScreen + RepoDetailScreen
     runners.py    #   RunnersScreen (Actions runners + current job)
-    common.py     #   shared formatting helpers (_fmt_dt, _language_chart)
+    common.py     #   shared formatting helpers (_fmt_dt, _language_chart) + Paginator
     __init__.py   #   re-exports GhReconApp
   __main__.py     # CLI entry point + token resolution
 ```
@@ -45,7 +45,27 @@ per-domain mixins — add a method to the mixin its endpoint belongs to.
 `api/mock.py`'s `MockClient` is a drop-in stand-in selected by `--mock` that
 returns the same dataclasses from synthetic data (no token/network). When you add
 or change a public client method the UI calls, mirror it there so mock mode keeps
-working.
+working. Its network-facing methods are wrapped with `@_latent`, which sleeps a
+short randomized `latency` (default `(0.4, 1.1)`s, `None` to disable) so mock runs
+exercise the same async/loading paths as the real client.
+
+Screens show progress with Textual's `loading` reactive: a worker sets the target
+widget's `.loading = True` (via `call_from_thread`) before fetching and the
+render/error handler sets it back to `False`. That overlays a `LoadingIndicator`
+automatically — prefer it over hand-mounting spinners or "loading…" text.
+
+## Pagination
+
+Browse lists are paged, not pulled whole (default page size `DEFAULT_PAGE_SIZE = 20`
+in `api/base.py`). Paged client methods take a `cursor` + `per_page` and return a
+`Page[T]` (`gh_recon.models`) whose `next_cursor` is an **opaque** token: a page
+number for REST `page`/`per_page` endpoints (members, repos), a Link-header URL for
+the audit log, or a slice index for client-side filtered lists (`_paginate_list`).
+The UI never interprets the cursor, so real and mock clients can use different cursor
+types. `ui/common.py`'s `Paginator` tracks visited cursors so `n`/`p` (next/prev) work
+even for cursor-based endpoints. Paged so far: members, repos, audit log. Bounded
+top-N lists (runners, repo contributors/commits, `recent_commit_repos` aggregation)
+are intentionally not paged. Keep client-side search filtering (it lists then slices).
 
 ## Run / verify
 

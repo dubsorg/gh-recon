@@ -66,6 +66,10 @@ and no network calls. The dataset is seeded from the org name, so a given org
 yields stable, internally-consistent members, repos, users, and runners. Useful
 for demos, screenshots, and UI work offline.
 
+Each mock call adds a short randomized delay to simulate network round-trips, so
+the loading indicators (a `LoadingIndicator` spinner over each list/table while
+its data is fetched) behave just like they do against the real API.
+
 ## Keys
 
 **Home menu**
@@ -82,6 +86,7 @@ for demos, screenshots, and UI work offline.
 | --- | --- |
 | `/` | Focus the filter box |
 | `Enter` | View selected user |
+| `n` / `p` | Next / previous page |
 | `r` | Refresh members |
 | `Esc` | Back to home menu |
 
@@ -90,6 +95,7 @@ for demos, screenshots, and UI work offline.
 | --- | --- |
 | `/` | Focus the filter box (list) |
 | `Enter` | View selected repo (list) |
+| `n` / `p` | Next / previous page (list) |
 | `o` | Open repo on github.com (detail) |
 | `r` | Refresh |
 | `Esc` | Back |
@@ -98,6 +104,7 @@ for demos, screenshots, and UI work offline.
 | Key | Action |
 | --- | --- |
 | `Enter` | View the selected repo (in the recent-commits list) |
+| `n` / `p` | Next / previous page of audit-log events |
 | `Esc` | Back to list |
 | `r` | Refresh |
 | `o` | Open user on github.com |
@@ -129,12 +136,17 @@ gh_recon/
     users.py      #   user-detail screen
     repos.py      #   repository list + detail screens
     runners.py    #   Actions runners screen
-    common.py     #   shared formatting helpers
+    common.py     #   shared formatting helpers + Paginator
   __main__.py     # CLI entry point
 ```
 
 ## Notes
 
+Lists are paged — members, repositories, and audit-log events are fetched **20 at a time**
+rather than all at once, with `n`/`p` to move between pages. Member and repository listing
+uses the REST `page`/`per_page` parameters; the audit log uses its Link-header cursors.
+
 GitHub's user-search API has no `org:` qualifier, so org-scoped search is implemented by
-listing org members (paginated, up to 500) and filtering by login client-side — the realistic
-flow for resolving known handles within an org.
+listing org members and filtering by login client-side, then slicing the requested page —
+the realistic flow for resolving known handles within an org. A substring search therefore
+still lists members to filter; plain browsing pages directly without pulling everything.

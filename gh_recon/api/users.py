@@ -6,8 +6,8 @@ import base64
 import hashlib
 from datetime import datetime, timezone
 
-from ..models import AuditEvent, PublicKeys, RepoCommitActivity, UserInfo
-from .base import API_ROOT, GitHubError, _parse_iso
+from ..models import AuditEvent, Page, PublicKeys, RepoCommitActivity, UserInfo
+from .base import API_ROOT, DEFAULT_PAGE_SIZE, GitHubError, _next_link, _parse_iso
 
 
 class UsersMixin:
@@ -39,16 +39,29 @@ class UsersMixin:
             info.org_role = None
         return info
 
-    def audit_events(self, login: str, limit: int = 30) -> list[AuditEvent]:
-        """Recent audit-log entries for a given actor within the org."""
-        params = {
-            "phrase": f"actor:{login}",
-            "per_page": min(limit, 100),
-            "order": "desc",
-        }
-        resp = self._get(f"{API_ROOT}/orgs/{self.org}/audit-log", params=params)
+    def audit_events(
+        self,
+        login: str,
+        cursor: str | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[AuditEvent]:
+        """One page of audit-log entries for a given actor within the org.
+
+        The audit-log API is cursor-paginated, so ``cursor`` is the Link-header
+        URL of the next page (returned as ``next_cursor``); ``None`` fetches the
+        first page.
+        """
+        if cursor:
+            resp = self._get(cursor)
+        else:
+            params = {
+                "phrase": f"actor:{login}",
+                "per_page": per_page,
+                "order": "desc",
+            }
+            resp = self._get(f"{API_ROOT}/orgs/{self.org}/audit-log", params=params)
         events: list[AuditEvent] = []
-        for e in resp.json()[:limit]:
+        for e in resp.json():
             ts = e.get("@timestamp") or e.get("created_at")
             dt = (
                 datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
@@ -64,7 +77,7 @@ class UsersMixin:
                     raw=e,
                 )
             )
-        return events
+        return Page(items=events, next_cursor=_next_link(resp))
 
     def recent_commit_repos(
         self, login: str, limit: int = 100

@@ -10,8 +10,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Label, Static
 
 from ..api import GitHubClient, GitHubError
-from ..models import CommitInfo, Repo
-from .common import _fmt_dt, _language_chart
+from ..models import CommitInfo, Page, Repo
+from .common import Paginator, _fmt_dt, _language_chart
 
 
 class RepositoriesScreen(Screen):
@@ -19,6 +19,8 @@ class RepositoriesScreen(Screen):
 
     BINDINGS = [
         Binding("slash", "focus_search", "Search"),
+        Binding("n", "next_page", "Next page"),
+        Binding("p", "prev_page", "Prev page"),
         Binding("r", "refresh", "Refresh"),
         Binding("enter", "open_selected", "View repo", show=False),
         Binding("escape", "app.pop_screen", "Back"),
@@ -34,6 +36,8 @@ class RepositoriesScreen(Screen):
     def __init__(self, client: GitHubClient) -> None:
         super().__init__()
         self.client = client
+        self._query = ""
+        self._paginator = Paginator()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -50,17 +54,29 @@ class RepositoriesScreen(Screen):
 
     def on_mount(self) -> None:
         self.sub_title = f"org: {self.client.org} / repositories"
-        self.load_repos("")
+        self.load_repos()
 
     def action_focus_search(self) -> None:
         self.query_one("#repo-search", Input).focus()
 
     def action_refresh(self) -> None:
-        self.load_repos(self.query_one("#repo-search", Input).value.strip())
+        self.load_repos()
+
+    def action_next_page(self) -> None:
+        if self._paginator.has_next:
+            self._paginator.next()
+            self.load_repos()
+
+    def action_prev_page(self) -> None:
+        if self._paginator.has_prev:
+            self._paginator.prev()
+            self.load_repos()
 
     @on(Input.Submitted, "#repo-search")
     def _on_search(self, event: Input.Submitted) -> None:
-        self.load_repos(event.value.strip())
+        self._query = event.value.strip()
+        self._paginator.reset()  # new query starts at page 1
+        self.load_repos()
 
     @on(DataTable.RowSelected, "#repos-table")
     def _on_row(self, event: DataTable.RowSelected) -> None:
@@ -77,23 +93,28 @@ class RepositoriesScreen(Screen):
             self.app.push_screen(RepoDetailScreen(self.client, name))
 
     @work(exclusive=True, thread=True)
-    def load_repos(self, query: str) -> None:
-        self.app.call_from_thread(
-            self.query_one("#repo-status", Static).update, "[dim]loading repos…[/dim]"
-        )
+    def load_repos(self) -> None:
+        self.app.call_from_thread(self._set_loading, True)
         try:
-            repos = self.client.search_repos(query)
+            page = self.client.search_repos(self._query, cursor=self._paginator.cursor)
         except GitHubError as exc:
-            self.app.call_from_thread(
-                self.query_one("#repo-status", Static).update, f"[red]{exc}[/red]"
-            )
+            self.app.call_from_thread(self._on_error, str(exc))
             return
-        self.app.call_from_thread(self._render_repos, repos, query)
+        self.app.call_from_thread(self._render_repos, page)
 
-    def _render_repos(self, repos: list[Repo], query: str) -> None:
+    def _set_loading(self, value: bool) -> None:
+        self.query_one("#repos-table", DataTable).loading = value
+
+    def _on_error(self, msg: str) -> None:
+        self._set_loading(False)
+        self.query_one("#repo-status", Static).update(f"[red]{msg}[/red]")
+
+    def _render_repos(self, page: Page) -> None:
+        self._paginator.record(page)
         table = self.query_one("#repos-table", DataTable)
+        table.loading = False
         table.clear()
-        for r in repos:
+        for r in page.items:
             flags = "".join(["A" if r.archived else "", "F" if r.fork else ""]) or "—"
             table.add_row(
                 r.name,
@@ -104,13 +125,24 @@ class RepositoriesScreen(Screen):
                 flags,
                 key=r.name,
             )
-        scope = f" matching '{query}'" if query else ""
-        self.query_one("#repo-status", Static).update(
-            f"[green]{len(repos)}[/green] repo(s){scope} — "
+        self.query_one("#repo-status", Static).update(self._status_line(page))
+        if page.items:
+            table.focus()
+
+    def _status_line(self, page: Page) -> str:
+        scope = f" matching '{self._query}'" if self._query else ""
+        total = f" of {page.total}" if page.total is not None else ""
+        nav = []
+        if self._paginator.has_prev:
+            nav.append("p prev")
+        if self._paginator.has_next:
+            nav.append("n next")
+        nav_hint = f" · {', '.join(nav)}" if nav else ""
+        return (
+            f"[green]{len(page.items)}[/green] repo(s){total}{scope} · "
+            f"page {self._paginator.page_number}{nav_hint} — "
             "Enter to view, / to filter, Esc to go back"
         )
-        if repos:
-            table.focus()
 
 
 class RepoDetailScreen(Screen):
@@ -168,11 +200,17 @@ class RepoDetailScreen(Screen):
         webbrowser.open(self._html_url)
         self.app.notify(f"Opening {self._html_url}")
 
+    def _set_tables_loading(self, value: bool) -> None:
+        self.query_one("#contrib-table", DataTable).loading = value
+        self.query_one("#rcommits-table", DataTable).loading = value
+
     @work(exclusive=True, thread=True)
     def load_repo(self) -> None:
+        self.app.call_from_thread(self._set_tables_loading, True)
         try:
             repo = self.client.get_repo(self.repo_name)
         except GitHubError as exc:
+            self.app.call_from_thread(self._set_tables_loading, False)
             self.app.call_from_thread(
                 self.query_one("#repo-fields", Static).update, f"[red]{exc}[/red]"
             )
@@ -229,6 +267,7 @@ class RepoDetailScreen(Screen):
     def _render_contributors(self, contributors, error: str | None) -> None:
         status = self.query_one("#contrib-status", Static)
         table = self.query_one("#contrib-table", DataTable)
+        table.loading = False
         table.clear()
         if error:
             status.update(f"[yellow]unavailable: {error}[/yellow]")
@@ -243,6 +282,7 @@ class RepoDetailScreen(Screen):
     def _render_commits(self, commits: list[CommitInfo], error: str | None) -> None:
         status = self.query_one("#rcommits-status", Static)
         table = self.query_one("#rcommits-table", DataTable)
+        table.loading = False
         table.clear()
         if error:
             status.update(f"[yellow]unavailable: {error}[/yellow]")

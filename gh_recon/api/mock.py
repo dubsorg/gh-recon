@@ -9,21 +9,24 @@ stable, internally-consistent data for the life of the process. No HTTP, no auth
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import random
+import time
 from datetime import datetime, timedelta, timezone
 
 from ..models import (
     AuditEvent,
     CommitInfo,
     Member,
+    Page,
     PublicKeys,
     RepoCommitActivity,
     Runner,
     RunnerJob,
     UserInfo,
 )
-from .base import GitHubError
+from .base import DEFAULT_PAGE_SIZE, GitHubError, _paginate_list
 
 _FIRST = [
     "ada", "alan", "grace", "linus", "margaret", "dennis", "ken", "barbara",
@@ -49,12 +52,35 @@ _WORKFLOWS = ["CI", "Release", "Deploy", "Lint", "Nightly", "Integration Tests"]
 _JOBS = ["build", "test", "lint", "publish", "package", "e2e"]
 
 
+def _latent(method):
+    """Wrap a client method so it sleeps a little first, faking network latency.
+
+    Mock data is generated in-memory and returns instantly, which hides the
+    app's async/loading behavior. A short randomized delay makes ``--mock`` feel
+    like real round-trips and exercises the loading indicators.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        self._sleep()
+        return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class MockClient:
     """Drop-in stand-in for :class:`GitHubClient` backed by synthetic data."""
 
-    def __init__(self, org: str, token: str | None = None, seed: int | None = None):
+    def __init__(
+        self,
+        org: str,
+        token: str | None = None,
+        seed: int | None = None,
+        latency: tuple[float, float] | None = (0.4, 1.1),
+    ):
         self.org = org
         self.token = token
+        self._latency = latency  # (min, max) seconds per call; None disables
         rng = random.Random(seed if seed is not None else _seed_from(org))
         self._now = datetime.now(timezone.utc)
         self._rng = rng
@@ -162,17 +188,30 @@ class MockClient:
     def _user_seed(self, login: str) -> random.Random:
         return random.Random(f"{self.org}/{login}")
 
+    def _sleep(self) -> None:
+        if self._latency:
+            time.sleep(random.uniform(*self._latency))
+
     # -- members ----------------------------------------------------------
 
-    def list_members(self, max_results: int = 500) -> list[Member]:
-        return self._members[:max_results]
+    @_latent
+    def list_members(
+        self, cursor: int | None = None, per_page: int = DEFAULT_PAGE_SIZE
+    ) -> Page[Member]:
+        return _paginate_list(self._members, cursor or 1, per_page)
 
-    def search_members(self, query: str, max_results: int = 500) -> list[Member]:
-        members = self.list_members(max_results=max_results)
+    @_latent
+    def search_members(
+        self,
+        query: str,
+        cursor: int | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[Member]:
         if not query:
-            return members
+            return _paginate_list(self._members, cursor or 1, per_page)
         q = query.lower()
-        return [m for m in members if q in m.login.lower()]
+        matches = [m for m in self._members if q in m.login.lower()]
+        return _paginate_list(matches, cursor or 1, per_page)
 
     def org_role(self, login: str) -> str | None:
         if login not in self._logins:
@@ -181,19 +220,32 @@ class MockClient:
 
     # -- repos ------------------------------------------------------------
 
-    def list_repos(self, max_results: int = 500) -> list:
+    @_latent
+    def list_repos(
+        self, cursor: int | None = None, per_page: int = DEFAULT_PAGE_SIZE
+    ) -> Page:
+        return _paginate_list(self._repos, cursor or 1, per_page)
+
+    def _list_all_repos(self, max_results: int = 500) -> list:
         return self._repos[:max_results]
 
-    def search_repos(self, query: str, max_results: int = 500) -> list:
-        repos = self.list_repos(max_results=max_results)
+    @_latent
+    def search_repos(
+        self,
+        query: str,
+        cursor: int | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page:
         if not query:
-            return repos
+            return _paginate_list(self._repos, cursor or 1, per_page)
         q = query.lower()
-        return [
-            r for r in repos
+        matches = [
+            r for r in self._repos
             if q in r.name.lower() or (r.description and q in r.description.lower())
         ]
+        return _paginate_list(matches, cursor or 1, per_page)
 
+    @_latent
     def get_repo(self, name: str):
         key = name.split("/")[-1]
         repo = self._repos_by_name.get(key)
@@ -201,6 +253,7 @@ class MockClient:
             raise GitHubError("not found", 404)
         return repo
 
+    @_latent
     def repo_contributors(self, name: str, limit: int = 15) -> list[tuple[str, int]]:
         rng = random.Random(f"{self.org}/{name}/contributors")
         n = min(limit, rng.randint(3, 15), len(self._logins))
@@ -209,6 +262,7 @@ class MockClient:
         out.sort(key=lambda kv: kv[1], reverse=True)
         return out[:limit]
 
+    @_latent
     def repo_commits(self, name: str, limit: int = 20) -> list[CommitInfo]:
         rng = random.Random(f"{self.org}/{name}/commits")
         verbs = ["Add", "Fix", "Refactor", "Remove", "Update", "Bump", "Wire up"]
@@ -229,6 +283,7 @@ class MockClient:
             )
         return commits
 
+    @_latent
     def language_bytes(self, repo_full_names: list[str],
                        max_repos: int = 25) -> list[tuple[str, int]]:
         totals: dict[str, int] = {}
@@ -240,9 +295,11 @@ class MockClient:
 
     # -- runners ----------------------------------------------------------
 
+    @_latent
     def list_runners(self, max_results: int = 200) -> list[Runner]:
         return self._runners[:max_results]
 
+    @_latent
     def running_jobs(self, max_repos: int = 60) -> dict[str, RunnerJob]:
         jobs: dict[str, RunnerJob] = {}
         for r in self._runners:
@@ -262,6 +319,7 @@ class MockClient:
 
     # -- users ------------------------------------------------------------
 
+    @_latent
     def get_user(self, login: str) -> UserInfo:
         if login in self._user_cache:
             return self._user_cache[login]
@@ -297,11 +355,17 @@ class MockClient:
         self._user_cache[login] = info
         return info
 
-    def audit_events(self, login: str, limit: int = 30) -> list[AuditEvent]:
+    @_latent
+    def audit_events(
+        self,
+        login: str,
+        cursor: int | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[AuditEvent]:
         rng = random.Random(f"{self.org}/{login}/audit")
         events = []
         when = self._now
-        for _ in range(min(limit, rng.randint(5, 30))):
+        for _ in range(rng.randint(0, 55)):
             when = when - timedelta(hours=rng.randint(1, 200))
             repo = rng.choice(self._repos)
             events.append(
@@ -313,8 +377,9 @@ class MockClient:
                     raw={},
                 )
             )
-        return events
+        return _paginate_list(events, cursor or 1, per_page)
 
+    @_latent
     def recent_commit_repos(self, login: str,
                             limit: int = 100) -> list[RepoCommitActivity]:
         rng = random.Random(f"{self.org}/{login}/activity")
@@ -337,6 +402,7 @@ class MockClient:
         )
         return out
 
+    @_latent
     def public_keys(self, login: str) -> PublicKeys:
         rng = random.Random(f"{self.org}/{login}/keys")
         keys = PublicKeys()
@@ -353,6 +419,7 @@ class MockClient:
     def whoami(self) -> str | None:
         return "mock-user"
 
+    @_latent
     def user_teams(self, login: str) -> list[str]:
         rng = random.Random(f"{self.org}/{login}/teams")
         pool = ["Platform", "Security", "Frontend", "Backend", "SRE", "Data",
