@@ -97,6 +97,7 @@ for demos, screenshots, and UI work offline.
 **User detail**
 | Key | Action |
 | --- | --- |
+| `Enter` | View the selected repo (in the recent-commits list) |
 | `Esc` | Back to list |
 | `r` | Refresh |
 | `o` | Open user on github.com |
