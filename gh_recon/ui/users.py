@@ -12,6 +12,7 @@ from textual.widgets import DataTable, Footer, Header, Label, Static
 from ..api import GitHubClient, GitHubError
 from ..models import AuditEvent, UserInfo
 from .common import _fmt_dt, _language_chart
+from .repos import RepoDetailScreen
 
 
 class UserDetailScreen(Screen):
@@ -205,7 +206,19 @@ class UserDetailScreen(Screen):
         )
         for r in repos:
             marker = "★ " if r is top else ""
-            table.add_row(f"{marker}{r.repo}", _fmt_dt(r.last_commit), str(r.count))
+            # key is the bare repo name so selecting the row opens repo detail
+            table.add_row(
+                f"{marker}{r.repo}",
+                _fmt_dt(r.last_commit),
+                str(r.count),
+                key=r.repo.split("/")[-1],
+            )
+
+    @on(DataTable.RowSelected, "#commits-table")
+    def _on_repo_selected(self, event: DataTable.RowSelected) -> None:
+        name = event.row_key.value
+        if name:
+            self.app.push_screen(RepoDetailScreen(self.client, name))
 
     def _render_events(self, events: list[AuditEvent], error: str | None) -> None:
         status = self.query_one("#events-status", Static)
