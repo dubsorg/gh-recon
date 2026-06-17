@@ -213,6 +213,14 @@ class MockClient:
         matches = [m for m in self._members if q in m.login.lower()]
         return _paginate_list(matches, cursor or 1, per_page)
 
+    @_latent
+    def member_count(self) -> int:
+        return len(self._members)
+
+    @_latent
+    def repo_count(self) -> int:
+        return len(self._repos)
+
     def org_role(self, login: str) -> str | None:
         if login not in self._logins:
             return None
@@ -252,6 +260,47 @@ class MockClient:
         if repo is None:
             raise GitHubError("not found", 404)
         return repo
+
+    @_latent
+    def get_readme(self, name: str) -> str | None:
+        key = name.split("/")[-1]
+        repo = self._repos_by_name.get(key)
+        if repo is None:
+            return None
+        rng = random.Random(f"{self.org}/{key}/readme")
+        if rng.random() < 0.15:
+            return None  # some repos have no README
+        lang = repo.language or "Python"
+        desc = repo.description or f"The {key} service."
+        return (
+            f"# {key}\n\n"
+            f"{desc}\n\n"
+            f"![build](https://img.shields.io/badge/build-passing-brightgreen) "
+            f"![lang](https://img.shields.io/badge/{lang}-blue)\n\n"
+            "## Overview\n\n"
+            f"`{key}` is part of the **{self.org}** platform. It is written in "
+            f"{lang} and follows the org's standard service layout.\n\n"
+            "## Installation\n\n"
+            "```bash\n"
+            f"git clone https://github.com/{self.org}/{key}.git\n"
+            f"cd {key}\n"
+            "make bootstrap\n"
+            "```\n\n"
+            "## Usage\n\n"
+            "Run the service locally:\n\n"
+            "```bash\n"
+            "make run\n"
+            "```\n\n"
+            "## Features\n\n"
+            "- Fast and reliable\n"
+            "- Fully observable\n"
+            "- Battle-tested in production\n\n"
+            "## Contributing\n\n"
+            "See `CONTRIBUTING.md`. Open a PR against `"
+            f"{repo.default_branch}` and request review.\n\n"
+            "## License\n\n"
+            "Internal — all rights reserved.\n"
+        )
 
     @_latent
     def repo_contributors(self, name: str, limit: int = 15) -> list[tuple[str, int]]:

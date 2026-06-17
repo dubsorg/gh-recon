@@ -6,7 +6,7 @@ organization recon, built with [Textual](https://textual.textualize.io/).
 Scoped to a single organization, it opens to a **home menu** that branches into:
 
 - **Users** — search the org's members by login, then **get user info**: full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
-- **Repositories** — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, and **recent commits**.
+- **Repositories** — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, **recent commits**, and its **rendered README** (Markdown).
 - **Runners** — list the org's Actions **self-hosted runners**, **grouped by runner group**, with online/offline status, idle/busy state, labels, and — for busy runners — the **workflow / job** they're currently running and on which repo.
 
 ## Install
@@ -71,6 +71,9 @@ the loading indicators (a `LoadingIndicator` spinner over each list/table while
 its data is fetched) behave just like they do against the real API.
 
 ## Keys
+
+The landing screen shows live **member** and **repository** counts for the org
+(rendered with Textual's `Digits` widget) above the menu.
 
 **Home menu**
 | Key | Action |
