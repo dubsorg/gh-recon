@@ -11,6 +11,9 @@ from textual.widgets import DataTable, Footer, Header, Static
 from ..api import GitHubClient, GitHubError
 from ..models import Runner, RunnerJob
 
+# Braille spinner frames cycled for busy (actively running) runners.
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 
 class RunnersScreen(Screen):
     """List self-hosted runners with status and the workflow each is running."""
@@ -28,18 +31,39 @@ class RunnersScreen(Screen):
     def __init__(self, client: GitHubClient) -> None:
         super().__init__()
         self.client = client
+        self._spin = 0
+        self._busy_keys: list[str] = []  # row keys of busy runners to animate
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("", id="runner-status")
         table = DataTable(id="runners-table", zebra_stripes=True, cursor_type="row")
-        table.add_columns("Runner", "OS", "Labels", "Status", "Workflow / Job", "Repo")
+        columns = table.add_columns(
+            "Runner", "OS", "Labels", "Status", "Workflow / Job", "Repo"
+        )
+        self._status_col = columns[3]
         yield table
         yield Footer()
 
     def on_mount(self) -> None:
         self.sub_title = f"org: {self.client.org} / runners"
+        self.set_interval(0.1, self._tick_spinner)
         self.load_runners()
+
+    def _busy_status(self, frame: str) -> str:
+        return f"[green]online[/green] · [green]{frame} busy[/green]"
+
+    def _tick_spinner(self) -> None:
+        if not self._busy_keys:
+            return
+        self._spin = (self._spin + 1) % len(_SPINNER)
+        status = self._busy_status(_SPINNER[self._spin])
+        table = self.query_one("#runners-table", DataTable)
+        for key in self._busy_keys:
+            try:
+                table.update_cell(key, self._status_col, status)
+            except Exception:
+                pass  # row gone mid-refresh — next render rebuilds it
 
     def action_refresh(self) -> None:
         self.load_runners()
@@ -78,6 +102,7 @@ class RunnersScreen(Screen):
         table = self.query_one("#runners-table", DataTable)
         table.loading = False
         table.clear()
+        self._busy_keys = []
         online = sum(1 for r in runners if r.status == "online")
         busy = sum(1 for r in runners if r.busy)
         if not runners:
@@ -102,10 +127,11 @@ class RunnersScreen(Screen):
                 key=f"group:{gname}",
             )
             for r in grunners:
-                if r.status == "online":
-                    status = "[green]online[/green]" + (
-                        " · busy" if r.busy else " · idle"
-                    )
+                if r.status == "online" and r.busy:
+                    status = self._busy_status(_SPINNER[self._spin])
+                    self._busy_keys.append(str(r.id))
+                elif r.status == "online":
+                    status = "[green]online[/green] · idle"
                 else:
                     status = f"[dim]{r.status}[/dim]"
                 job = jobs.get(r.name)

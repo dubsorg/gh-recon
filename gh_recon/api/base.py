@@ -146,3 +146,25 @@ def _next_link(resp: requests.Response) -> str | None:
         if rel == 'rel="next"':
             return url
     return None
+
+
+def _last_page(resp: requests.Response) -> int | None:
+    """Page number of the ``rel="last"`` Link, if present.
+
+    With ``per_page=1`` this equals the total item count — a cheap way to count
+    a paginated collection without fetching all of it.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    link = resp.headers.get("Link", "")
+    for part in link.split(","):
+        section = part.split(";")
+        if len(section) < 2:
+            continue
+        url = section[0].strip().strip("<>")
+        if section[1].strip() == 'rel="last"':
+            try:
+                return int(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+            except ValueError:
+                return None
+    return None

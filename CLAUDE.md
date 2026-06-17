@@ -19,8 +19,8 @@ gh_recon/
   models.py       # dataclasses shared by both layers (Member, Repo, UserInfo, …)
   api/            # requests-based GitHub client; returns dataclasses, raises GitHubError
     base.py       #   transport: BaseClient (_get/_graphql), GitHubError, resolve_token, parse helpers
-    members.py    #   MembersMixin: list/search members, org_role
-    repos.py      #   ReposMixin: list/search/get repos, contributors, commits, languages
+    members.py    #   MembersMixin: list/search/count members, org_role
+    repos.py      #   ReposMixin: list/search/get/count repos, contributors, commits, languages, readme
     runners.py    #   RunnersMixin: Actions self-hosted runners (+ runner group, current-job correlation)
     users.py      #   UsersMixin: profile, keys, teams, audit log, authored-commit activity
     mock.py       #   MockClient: synthetic data mirroring GitHubClient's surface (--mock)

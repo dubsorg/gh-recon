@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, OptionList, Static
+from textual.widgets import Digits, Footer, Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from ..api import GitHubClient
+from ..api import GitHubClient, GitHubError
 from .members import MembersScreen
 from .repos import RepositoriesScreen
 from .runners import RunnersScreen
@@ -72,6 +72,10 @@ class HomeScreen(Screen):
     #menu { width: 104; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     #banner { width: 1fr; text-align: center; margin-bottom: 1; }
     #menu-title { width: 1fr; text-align: center; margin-bottom: 1; }
+    #stats { height: auto; align-horizontal: center; margin-bottom: 1; }
+    .stat { width: 32; height: auto; border: round $panel; padding: 0 1; margin: 0 1; }
+    .stat-label { width: 1fr; text-align: center; color: $text-muted; }
+    #stats Digits { width: 1fr; text-align: center; color: $accent; }
     #home-menu { height: auto; }
     """
 
@@ -85,6 +89,13 @@ class HomeScreen(Screen):
         with Vertical(id="menu"):
             yield Static(_gradient_banner(), id="banner")
             yield Static("", id="menu-title")
+            with Horizontal(id="stats"):
+                with Vertical(classes="stat"):
+                    yield Label("Users", classes="stat-label")
+                    yield Digits("", id="users-digits")
+                with Vertical(classes="stat"):
+                    yield Label("Repositories", classes="stat-label")
+                    yield Digits("", id="repos-digits")
             yield OptionList(
                 Option("Users          search org members and inspect profiles", id="users"),
                 Option("Repositories   browse org repositories and their detail", id="repos"),
@@ -100,6 +111,30 @@ class HomeScreen(Screen):
         self.set_interval(0.5, self._blink_cursor)
         self.query_one("#home-menu", OptionList).focus()
         self._animate_intro()
+        self.load_counts()
+
+    @work(exclusive=True, thread=True)
+    def load_counts(self) -> None:
+        self.app.call_from_thread(self._set_counts_loading, True)
+        try:
+            users = self.client.member_count()
+        except GitHubError:
+            users = None
+        try:
+            repos = self.client.repo_count()
+        except GitHubError:
+            repos = None
+        self.app.call_from_thread(self._render_counts, users, repos)
+
+    def _set_counts_loading(self, value: bool) -> None:
+        self.query_one("#users-digits", Digits).loading = value
+        self.query_one("#repos-digits", Digits).loading = value
+
+    def _render_counts(self, users: int | None, repos: int | None) -> None:
+        for digit_id, value in (("#users-digits", users), ("#repos-digits", repos)):
+            digit = self.query_one(digit_id, Digits)
+            digit.loading = False
+            digit.update(str(value) if value is not None else "—")
 
     def _animate_intro(self) -> None:
         """Fade the banner and menu card in on entry."""

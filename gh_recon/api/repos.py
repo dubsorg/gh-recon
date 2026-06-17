@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from ..models import CommitInfo, Page, Repo
@@ -9,6 +10,7 @@ from .base import (
     API_ROOT,
     DEFAULT_PAGE_SIZE,
     GitHubError,
+    _last_page,
     _next_link,
     _paginate_list,
     _parse_iso,
@@ -52,6 +54,14 @@ class ReposMixin:
         has_next = _next_link(resp) is not None
         return Page(items=repos, next_cursor=(page + 1) if has_next else None)
 
+    def repo_count(self) -> int:
+        """Total org repos, via the per_page=1 Link-header trick (one call)."""
+        resp = self._get(
+            f"{API_ROOT}/orgs/{self.org}/repos", params={"per_page": 1}
+        )
+        last = _last_page(resp)
+        return last if last is not None else len(resp.json())
+
     def _list_all_repos(self, max_results: int = 500) -> list[Repo]:
         """Accumulate every org repo (for client-side search and run scans)."""
         repos: list[Repo] = []
@@ -90,6 +100,19 @@ class ReposMixin:
 
     def get_repo(self, name: str) -> Repo:
         return self._repo_from_json(self._get(f"{API_ROOT}/repos/{self._repo_path(name)}").json())
+
+    def get_readme(self, name: str) -> str | None:
+        """Return the repo's README as markdown text, or None if it has none."""
+        try:
+            data = self._get(f"{API_ROOT}/repos/{self._repo_path(name)}/readme").json()
+        except GitHubError as exc:
+            if exc.status == 404:
+                return None  # repo has no README
+            raise
+        content = data.get("content", "")
+        if data.get("encoding") == "base64":
+            return base64.b64decode(content).decode("utf-8", errors="replace")
+        return content or None
 
     def repo_contributors(self, name: str, limit: int = 15) -> list[tuple[str, int]]:
         data = self._get(

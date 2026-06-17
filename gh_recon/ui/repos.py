@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, Label, Static
+from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, Static
 
 from ..api import GitHubClient, GitHubError
 from ..models import CommitInfo, Page, Repo
@@ -158,7 +158,9 @@ class RepoDetailScreen(Screen):
     #detail-body { height: 1fr; }
     #repo-profile { width: 42%; border-right: solid $panel; padding: 0 1; }
     #repo-right { width: 1fr; padding: 0 1; }
-    DataTable { height: 1fr; }
+    #repo-right DataTable { height: 1fr; }
+    #readme-label { margin-top: 1; }
+    #repo-readme { height: auto; background: transparent; margin: 0; }
     """
 
     def __init__(self, client: GitHubClient, name: str) -> None:
@@ -174,6 +176,8 @@ class RepoDetailScreen(Screen):
                 yield Static(f"[b]{self.client.org}/{self.repo_name}[/b]", id="repo-title")
                 yield Static("loading…", id="repo-fields")
                 yield Static("", id="repo-languages")
+                yield Label("[b]README[/b]", id="readme-label")
+                yield Markdown("", id="repo-readme")
             with Vertical(id="repo-right"):
                 yield Label("[b]Top contributors[/b]")
                 yield Static("", id="contrib-status")
@@ -203,6 +207,7 @@ class RepoDetailScreen(Screen):
     def _set_tables_loading(self, value: bool) -> None:
         self.query_one("#contrib-table", DataTable).loading = value
         self.query_one("#rcommits-table", DataTable).loading = value
+        self.query_one("#repo-readme", Markdown).loading = value
 
     @work(exclusive=True, thread=True)
     def load_repo(self) -> None:
@@ -231,6 +236,19 @@ class RepoDetailScreen(Screen):
             self.app.call_from_thread(self._render_commits, commits, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_commits, [], str(exc))
+        try:
+            readme = self.client.get_readme(self.repo_name)
+            self.app.call_from_thread(self._render_readme, readme, None)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_readme, None, str(exc))
+
+    def _render_readme(self, text: str | None, error: str | None) -> None:
+        md = self.query_one("#repo-readme", Markdown)
+        md.loading = False
+        if error:
+            md.update(f"*README unavailable: {error}*")
+        else:
+            md.update(text or "*This repository has no README.*")
 
     def _render_meta(self, repo: Repo) -> None:
         self._html_url = repo.html_url or self._html_url

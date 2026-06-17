@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import Member, Page
-from .base import API_ROOT, DEFAULT_PAGE_SIZE, GitHubError, _next_link, _paginate_list
+from .base import (
+    API_ROOT,
+    DEFAULT_PAGE_SIZE,
+    GitHubError,
+    _last_page,
+    _next_link,
+    _paginate_list,
+)
 
 
 class MembersMixin:
@@ -32,6 +39,14 @@ class MembersMixin:
         members = [self._member_from_json(m) for m in resp.json()]
         has_next = _next_link(resp) is not None
         return Page(items=members, next_cursor=(page + 1) if has_next else None)
+
+    def member_count(self) -> int:
+        """Total org members, via the per_page=1 Link-header trick (one call)."""
+        resp = self._get(
+            f"{API_ROOT}/orgs/{self.org}/members", params={"per_page": 1}
+        )
+        last = _last_page(resp)
+        return last if last is not None else len(resp.json())
 
     def _list_all_members(self, max_results: int = 500) -> list[Member]:
         """Accumulate every org member (used for client-side search filtering)."""
