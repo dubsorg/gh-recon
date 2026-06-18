@@ -16,8 +16,12 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ..models import (
+    ActionsUsage,
     AuditEvent,
     CommitInfo,
+    CopilotBilling,
+    CopilotLangStat,
+    CopilotMetrics,
     Member,
     Page,
     PublicKeys,
@@ -221,6 +225,56 @@ class MockClient:
     def repo_count(self) -> int:
         return len(self._repos)
 
+    # -- copilot ----------------------------------------------------------
+
+    @_latent
+    def copilot_billing(self) -> CopilotBilling:
+        rng = random.Random(f"{self.org}/copilot/billing")
+        total = max(5, int(len(self._members) * rng.uniform(0.4, 0.8)))
+        active = int(total * rng.uniform(0.5, 0.95))
+        return CopilotBilling(
+            total_seats=total,
+            active_this_cycle=active,
+            inactive_this_cycle=total - active,
+            added_this_cycle=rng.randint(0, 5),
+            seat_management_setting=rng.choice(
+                ["assign_selected", "assign_all", "disabled"]
+            ),
+            public_code_suggestions=rng.choice(["allow", "block"]),
+        )
+
+    @_latent
+    def copilot_metrics(self) -> CopilotMetrics:
+        rng = random.Random(f"{self.org}/copilot/metrics")
+        seats = max(5, int(len(self._members) * 0.6))
+        langs = []
+        for name in rng.sample(_LANGS, rng.randint(4, 8)):
+            suggestions = rng.randint(200, 9000)
+            acceptances = int(suggestions * rng.uniform(0.2, 0.55))
+            lines_sug = suggestions * rng.randint(1, 4)
+            langs.append(
+                CopilotLangStat(
+                    language=name,
+                    engaged_users=rng.randint(1, seats),
+                    suggestions=suggestions,
+                    acceptances=acceptances,
+                    lines_suggested=lines_sug,
+                    lines_accepted=int(lines_sug * rng.uniform(0.2, 0.55)),
+                )
+            )
+        langs.sort(key=lambda s: s.suggestions, reverse=True)
+        active = rng.randint(int(seats * 0.4), seats)
+        end = self._now.date()
+        return CopilotMetrics(
+            start=(end - timedelta(days=27)).isoformat(),
+            end=end.isoformat(),
+            days=28,
+            active_users_latest=active,
+            engaged_users_latest=int(active * rng.uniform(0.6, 0.95)),
+            active_users_peak=min(seats, active + rng.randint(0, 6)),
+            languages=langs,
+        )
+
     def org_role(self, login: str) -> str | None:
         if login not in self._logins:
             return None
@@ -365,6 +419,24 @@ class MockClient:
                 started_at=self._now - timedelta(minutes=rng.randint(1, 90)),
             )
         return jobs
+
+    @_latent
+    def actions_usage(self, run_scan_repos: int = 40) -> ActionsUsage:
+        rng = random.Random(f"{self.org}/actions/usage")
+        by_os = {
+            "UBUNTU": rng.randint(500, 9000),
+            "MACOS": rng.randint(0, 2500),
+            "WINDOWS": rng.randint(0, 3500),
+        }
+        total = sum(by_os.values())
+        included = rng.choice([2000, 3000, 50000])
+        return ActionsUsage(
+            total_minutes=total,
+            paid_minutes=max(0, total - included),
+            included_minutes=included,
+            minutes_by_os=by_os,
+            runs_last_30d=rng.randint(50, 6000),
+        )
 
     # -- users ------------------------------------------------------------
 

@@ -17,21 +17,24 @@ run.sh            # local dev wrapper around ./gh-recon
 requirements.txt  # deps installed into the auto-created venv (textual, requests)
 gh_recon/
   models.py       # dataclasses shared by both layers (Member, Repo, UserInfo, …)
+  config.py       # tiny JSON prefs under XDG config dir (persists the selected theme)
   api/            # requests-based GitHub client; returns dataclasses, raises GitHubError
     base.py       #   transport: BaseClient (_get/_graphql), GitHubError, resolve_token, parse helpers
     members.py    #   MembersMixin: list/search/count members, org_role
     repos.py      #   ReposMixin: list/search/get/count repos, contributors, commits, languages, readme
-    runners.py    #   RunnersMixin: Actions self-hosted runners (+ runner group, current-job correlation)
+    actions.py    #   ActionsMixin: usage metrics + self-hosted runners (+ runner group, current-job correlation)
     users.py      #   UsersMixin: profile, keys, teams, audit log, authored-commit activity
+    copilot.py    #   CopilotMixin: Copilot seat billing + usage metrics
     mock.py       #   MockClient: synthetic data mirroring GitHubClient's surface (--mock)
     __init__.py   #   assembles GitHubClient from the mixins; re-exports GitHubError, resolve_token, MockClient
   ui/             # Textual presentation layer, one module per domain
     app.py        #   GhReconApp shell + OrgPromptScreen
-    home.py       #   HomeScreen landing menu (Users / Repositories / Runners)
+    home.py       #   HomeScreen landing menu (Users / Repositories / Actions / Copilot)
     members.py    #   MembersScreen (member search)
     users.py      #   UserDetailScreen
     repos.py      #   RepositoriesScreen + RepoDetailScreen
-    runners.py    #   RunnersScreen (Actions runners + current job)
+    actions.py    #   ActionsScreen (usage metrics + runners + current job)
+    copilot.py    #   CopilotScreen (seats + usage metrics)
     common.py     #   shared formatting helpers (_fmt_dt, _language_chart) + Paginator
     __init__.py   #   re-exports GhReconApp
   __main__.py     # CLI entry point + token resolution
@@ -88,14 +91,21 @@ logic with a `python -c` against `gh_recon.api`.
   are handled with `@on(...)`. Follow these patterns when adding screens/widgets.
 - Reuse existing helpers (`_fmt_dt`, `_language_chart`) and the dataclasses
   (`UserInfo`, `Repo`, `CommitInfo`, `AuditEvent`) rather than reinventing.
+- Don't name a screen/widget method `_render` — it shadows Textual's internal
+  `Widget._render()` and crashes on paint. Use a domain name (`_render_copilot`).
 
 ## Auth & scopes
 
 Token resolution order: `--token`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`.
 Member search/user info need a normal token (`read:org` for full visibility). The
 **audit log** needs an org-owner token with `read:audit_log` (Enterprise Cloud only).
-**Actions runners** need an org-admin token (`admin:org`, or fine-grained self-hosted
-runners read). Both must degrade gracefully when unavailable. Never log or echo tokens.
+**Actions** runners need an org-admin token (`admin:org`, or fine-grained self-hosted
+runners read); usage **minutes** need org billing access (`actions_usage` leaves minutes
+`None` on 403/404 and counts 30-day runs via a bounded per-repo `total_count` scan).
+**Copilot** (seats + metrics) needs `manage_billing:copilot`/`read:org`/
+`admin:org` and the org to have Copilot Business/Enterprise — `copilot_billing`/
+`copilot_metrics` return `None` (not an error) on 403/404/422 so the screen degrades.
+All of these must degrade gracefully when unavailable. Never log or echo tokens.
 
 The runners screen has no org-level "running jobs" endpoint to lean on, so it maps a
 busy runner to its workflow/job by scanning in-progress workflow runs across the org's

@@ -7,15 +7,18 @@ repos, and users live in their own modules. The dataclasses they return are in
 
 from __future__ import annotations
 
+from .actions import ActionsMixin
 from .base import BaseClient, GitHubError, resolve_token
+from .copilot import CopilotMixin
 from .members import MembersMixin
 from .mock import MockClient
 from .repos import ReposMixin
-from .runners import RunnersMixin
 from .users import UsersMixin
 
 
-class GitHubClient(MembersMixin, ReposMixin, RunnersMixin, UsersMixin, BaseClient):
+class GitHubClient(
+    MembersMixin, ReposMixin, ActionsMixin, UsersMixin, CopilotMixin, BaseClient
+):
     """GitHub REST client scoped to a single org (``self.org``)."""
 
 
