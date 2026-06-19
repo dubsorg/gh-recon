@@ -12,9 +12,10 @@ from textual.widgets import Digits, Footer, Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from ..api import GitHubClient, GitHubError
+from .actions import ActionsScreen
+from .copilot import CopilotScreen
 from .members import MembersScreen
 from .repos import RepositoriesScreen
-from .runners import RunnersScreen
 
 # Fixed-width 5-row block font. Every glyph row is the same width, so the
 # wordmark is column-aligned by construction in any monospace terminal.
@@ -62,7 +63,8 @@ class HomeScreen(Screen):
     BINDINGS = [
         Binding("u", "open_users", "Users"),
         Binding("R", "open_repos", "Repositories"),
-        Binding("a", "open_runners", "Runners"),
+        Binding("a", "open_actions", "Actions"),
+        Binding("c", "open_copilot", "Copilot"),
         Binding("enter", "open_selected", "Open", show=False),
         Binding("q", "app.quit", "Quit"),
     ]
@@ -99,7 +101,8 @@ class HomeScreen(Screen):
             yield OptionList(
                 Option("Users          search org members and inspect profiles", id="users"),
                 Option("Repositories   browse org repositories and their detail", id="repos"),
-                Option("Runners        Actions runners: status and current job", id="runners"),
+                Option("Actions        usage metrics + self-hosted runners", id="actions"),
+                Option("Copilot        org Copilot seats and usage metrics", id="copilot"),
                 id="home-menu",
             )
         yield Footer()
@@ -137,15 +140,18 @@ class HomeScreen(Screen):
             digit.update(str(value) if value is not None else "—")
 
     def _animate_intro(self) -> None:
-        """Fade the banner and menu card in on entry."""
+        """Fade the banner in on entry.
+
+        We deliberately fade only the banner, not the whole #menu card. The
+        OptionList lives inside #menu, and animating the container's opacity
+        composites the list against the screen's black background — on first
+        mount that leaves the list rendered black/unreadable until a full
+        re-render (e.g. switching screens and back). Keeping the card at full
+        opacity avoids putting the list through opacity compositing.
+        """
         banner = self.query_one("#banner", Static)
         banner.styles.opacity = 0.0
         banner.styles.animate("opacity", value=1.0, duration=0.9, easing="out_cubic")
-        menu = self.query_one("#menu", Vertical)
-        menu.styles.opacity = 0.0
-        menu.styles.animate(
-            "opacity", value=1.0, duration=0.5, delay=0.1, easing="out_cubic"
-        )
 
     def _blink_cursor(self) -> None:
         self._cursor_on = not self._cursor_on
@@ -170,13 +176,18 @@ class HomeScreen(Screen):
     def action_open_repos(self) -> None:
         self._open("repos")
 
-    def action_open_runners(self) -> None:
-        self._open("runners")
+    def action_open_actions(self) -> None:
+        self._open("actions")
+
+    def action_open_copilot(self) -> None:
+        self._open("copilot")
 
     def _open(self, area: str | None) -> None:
         if area == "users":
             self.app.push_screen(MembersScreen(self.client))
         elif area == "repos":
             self.app.push_screen(RepositoriesScreen(self.client))
-        elif area == "runners":
-            self.app.push_screen(RunnersScreen(self.client))
+        elif area == "actions":
+            self.app.push_screen(ActionsScreen(self.client))
+        elif area == "copilot":
+            self.app.push_screen(CopilotScreen(self.client))

@@ -1,18 +1,20 @@
-"""GitHub Actions self-hosted runners: listing and current-job correlation."""
+"""GitHub Actions: self-hosted runners, current-job correlation, and usage."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..models import Runner, RunnerJob
+from ..models import ActionsUsage, Runner, RunnerJob
 from .base import API_ROOT, GitHubError, _next_link, _parse_iso, _to_utc
 
 
-class RunnersMixin:
-    """Org Actions runner endpoints. Mixed into :class:`GitHubClient`.
+class ActionsMixin:
+    """Org Actions endpoints. Mixed into :class:`GitHubClient`.
 
     Listing runners needs an org-admin token (``admin:org``, or fine-grained
-    *Self-hosted runners* read). Callers should degrade gracefully on 403.
+    *Self-hosted runners* read); usage minutes need org billing access. Callers
+    should degrade gracefully on 403.
     """
 
     def list_runners(self, max_results: int = 200) -> list[Runner]:
@@ -126,3 +128,51 @@ class RunnersMixin:
                         started_at=_to_utc(_parse_iso(job.get("started_at"))),
                     )
         return jobs_by_runner
+
+    def actions_usage(self, run_scan_repos: int = 40) -> ActionsUsage:
+        """Org Actions usage: billing minutes + a best-effort 30-day run count.
+
+        Minutes come from the org Actions billing endpoint (needs billing
+        access; left ``None`` on 403/404). GitHub has no org-level run count, so
+        runs are summed from each repo's ``actions/runs?created=>=`` ``total_count``
+        over the most-recently-pushed repos (bounded by ``run_scan_repos``).
+        """
+        total = paid = included = None
+        by_os: dict[str, int] = {}
+        try:
+            b = self._get(
+                f"{API_ROOT}/orgs/{self.org}/settings/billing/actions"
+            ).json()
+            total = b.get("total_minutes_used")
+            paid = b.get("total_paid_minutes_used")
+            included = b.get("included_minutes")
+            by_os = {
+                k: int(v)
+                for k, v in (b.get("minutes_used_breakdown") or {}).items()
+                if v
+            }
+        except GitHubError as exc:
+            if exc.status not in (403, 404):
+                raise  # only swallow "no access" — surface real errors
+
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        runs = 0
+        counted = False
+        for repo in self._list_all_repos(max_results=run_scan_repos):
+            try:
+                data = self._get(
+                    f"{API_ROOT}/repos/{repo.full_name}/actions/runs",
+                    params={"created": f">={since}", "per_page": 1},
+                ).json()
+            except GitHubError:
+                continue  # Actions disabled or inaccessible — skip
+            runs += int(data.get("total_count", 0))
+            counted = True
+
+        return ActionsUsage(
+            total_minutes=total,
+            paid_minutes=paid,
+            included_minutes=included,
+            minutes_by_os=by_os,
+            runs_last_30d=runs if counted else None,
+        )

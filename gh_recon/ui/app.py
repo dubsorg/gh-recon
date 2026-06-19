@@ -10,6 +10,7 @@ from textual.theme import Theme
 from textual.widgets import Input, Label
 
 from ..api import GitHubClient, MockClient
+from ..config import load_prefs, save_prefs
 from .home import HomeScreen
 
 # A neon "recon" terminal palette — green/cyan on near-black.
@@ -74,11 +75,22 @@ class GhReconApp(App):
 
     def on_mount(self) -> None:
         self.register_theme(RECON_THEME)
-        self.theme = "recon"
+        saved = load_prefs().get("theme")
+        # Fall back to "recon" if no theme was saved or the saved one is no
+        # longer available (e.g. a built-in theme was renamed/removed).
+        self.theme = saved if saved in self.available_themes else "recon"
+        # Persist whatever the user picks later (via the command palette).
+        # Subscribing after the initial set avoids re-writing the same value.
+        self.theme_changed_signal.subscribe(self, self._persist_theme)
         if self._org:
             self._start(self._org)
         else:
             self.push_screen(OrgPromptScreen(), self._on_org)
+
+    def _persist_theme(self, theme: Theme) -> None:
+        prefs = load_prefs()
+        prefs["theme"] = theme.name
+        save_prefs(prefs)
 
     def _on_org(self, org: str | None) -> None:
         if not org:

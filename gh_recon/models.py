@@ -126,3 +126,55 @@ class RunnerJob:
     repo: str
     html_url: str
     started_at: datetime | None
+
+
+@dataclass
+class ActionsUsage:
+    """Org Actions usage for the current cycle / last 30 days (best-effort)."""
+
+    total_minutes: int | None
+    paid_minutes: int | None
+    included_minutes: int | None
+    minutes_by_os: dict[str, int] = field(default_factory=dict)
+    runs_last_30d: int | None = None
+
+
+@dataclass
+class CopilotBilling:
+    """Org Copilot seat breakdown (from /orgs/{org}/copilot/billing)."""
+
+    total_seats: int
+    active_this_cycle: int
+    inactive_this_cycle: int
+    added_this_cycle: int
+    seat_management_setting: str | None
+    public_code_suggestions: str | None
+
+
+@dataclass
+class CopilotLangStat:
+    """Aggregated Copilot code-completion stats for one language."""
+
+    language: str
+    engaged_users: int
+    suggestions: int
+    acceptances: int
+    lines_suggested: int
+    lines_accepted: int
+
+    @property
+    def acceptance_rate(self) -> float:
+        return (self.acceptances / self.suggestions * 100) if self.suggestions else 0.0
+
+
+@dataclass
+class CopilotMetrics:
+    """Org Copilot usage over the reporting window (from /copilot/metrics)."""
+
+    start: str | None
+    end: str | None
+    days: int
+    active_users_latest: int
+    engaged_users_latest: int
+    active_users_peak: int
+    languages: list[CopilotLangStat] = field(default_factory=list)

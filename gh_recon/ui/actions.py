@@ -1,22 +1,23 @@
-"""Runners screen: org Actions self-hosted runners and their current job."""
+"""Actions screen: org Actions usage metrics plus self-hosted runners."""
 
 from __future__ import annotations
 
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Digits, Footer, Header, Label, Static
 
 from ..api import GitHubClient, GitHubError
-from ..models import Runner, RunnerJob
+from ..models import ActionsUsage, Runner, RunnerJob
 
 # Braille spinner frames cycled for busy (actively running) runners.
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-class RunnersScreen(Screen):
-    """List self-hosted runners with status and the workflow each is running."""
+class ActionsScreen(Screen):
+    """Org Actions usage (runs / minutes) plus self-hosted runners."""
 
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
@@ -24,6 +25,11 @@ class RunnersScreen(Screen):
     ]
 
     CSS = """
+    #actions-stats { height: auto; align-horizontal: center; margin: 1 0; }
+    .stat { width: 28; height: auto; border: round $panel; padding: 0 1; margin: 0 1; }
+    .stat-label { width: 1fr; text-align: center; color: $text-muted; }
+    #actions-stats Digits { width: 1fr; text-align: center; color: $accent; }
+    #usage-detail { height: auto; padding: 0 1; color: $text-muted; }
     #runner-status { height: 1; padding: 0 1; color: $text-muted; }
     #runners-table { height: 1fr; }
     """
@@ -36,6 +42,17 @@ class RunnersScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        with Horizontal(id="actions-stats"):
+            with Vertical(classes="stat"):
+                yield Label("Workflow runs (30d)", classes="stat-label")
+                yield Digits("", id="runs-digits")
+            with Vertical(classes="stat"):
+                yield Label("Minutes used", classes="stat-label")
+                yield Digits("", id="minutes-digits")
+            with Vertical(classes="stat"):
+                yield Label("Paid minutes", classes="stat-label")
+                yield Digits("", id="paid-digits")
+        yield Static("", id="usage-detail")
         yield Static("", id="runner-status")
         table = DataTable(id="runners-table", zebra_stripes=True, cursor_type="row")
         columns = table.add_columns(
@@ -46,9 +63,54 @@ class RunnersScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.sub_title = f"org: {self.client.org} / runners"
+        self.sub_title = f"org: {self.client.org} / actions"
         self.set_interval(0.1, self._tick_spinner)
         self.load_runners()
+        self.load_usage()
+
+    def action_refresh(self) -> None:
+        self.load_runners()
+        self.load_usage()
+
+    @work(exclusive=True, thread=True, group="usage")
+    def load_usage(self) -> None:
+        self.app.call_from_thread(self._set_usage_loading, True)
+        try:
+            usage = self.client.actions_usage()
+        except GitHubError as exc:
+            self.app.call_from_thread(self._usage_error, str(exc))
+            return
+        self.app.call_from_thread(self._render_usage, usage)
+
+    def _set_usage_loading(self, value: bool) -> None:
+        for did in ("#runs-digits", "#minutes-digits", "#paid-digits"):
+            self.query_one(did, Digits).loading = value
+
+    def _usage_error(self, msg: str) -> None:
+        self._set_usage_loading(False)
+        self.query_one("#usage-detail", Static).update(
+            f"[yellow]Usage metrics unavailable: {msg}[/yellow]"
+        )
+
+    def _render_usage(self, usage: ActionsUsage) -> None:
+        def to_digits(value: int | None) -> str:
+            return str(value) if value is not None else "—"
+
+        self.query_one("#runs-digits", Digits).loading = False
+        self.query_one("#minutes-digits", Digits).loading = False
+        self.query_one("#paid-digits", Digits).loading = False
+        self.query_one("#runs-digits", Digits).update(to_digits(usage.runs_last_30d))
+        self.query_one("#minutes-digits", Digits).update(to_digits(usage.total_minutes))
+        self.query_one("#paid-digits", Digits).update(to_digits(usage.paid_minutes))
+        detail = []
+        if usage.included_minutes is not None:
+            detail.append(f"included: {usage.included_minutes}")
+        if usage.minutes_by_os:
+            detail.append(
+                "by OS — "
+                + ", ".join(f"{os}: {m}" for os, m in usage.minutes_by_os.items())
+            )
+        self.query_one("#usage-detail", Static).update(" · ".join(detail))
 
     def _busy_status(self, frame: str) -> str:
         return f"[green]online[/green] · [green]{frame} busy[/green]"
@@ -64,9 +126,6 @@ class RunnersScreen(Screen):
                 table.update_cell(key, self._status_col, status)
             except Exception:
                 pass  # row gone mid-refresh — next render rebuilds it
-
-    def action_refresh(self) -> None:
-        self.load_runners()
 
     @work(exclusive=True, thread=True)
     def load_runners(self) -> None:

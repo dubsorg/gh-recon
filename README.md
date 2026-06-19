@@ -7,7 +7,8 @@ Scoped to a single organization, it opens to a **home menu** that branches into:
 
 - **Users** — search the org's members by login, then **get user info**: full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
 - **Repositories** — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, **top contributors**, **recent commits**, and its **rendered README** (Markdown).
-- **Runners** — list the org's Actions **self-hosted runners**, **grouped by runner group**, with online/offline status, idle/busy state, labels, and — for busy runners — the **workflow / job** they're currently running and on which repo.
+- **Actions** — org Actions **usage metrics** (workflow runs in the last 30 days, minutes used / paid, with a by-OS breakdown) shown with `Digits`, plus the org's **self-hosted runners**, **grouped by runner group**, with online/offline status, idle/busy state (an animated spinner for busy runners), labels, and — for busy runners — the **workflow / job** they're currently running and on which repo.
+- **Copilot** — org Copilot **seat breakdown** (total/active/inactive, seat-management & public-suggestions policy) and **usage metrics** over the reporting window: active/engaged users plus per-language **suggestions, acceptances, and acceptance rate**.
 
 ## Install
 
@@ -38,9 +39,14 @@ A token is resolved in this order: `--token`, `GH_TOKEN`, `GITHUB_TOKEN`, then `
   (fine-grained: *Organization → Administration* read) and is a **GitHub Enterprise Cloud**
   feature. Without it, the user-info screen shows a clear "audit log unavailable" notice and
   the rest of the app still works.
-- **Runners** require an **organization admin** token with `admin:org` (fine-grained:
-  *Organization → Self-hosted runners* read). Without it, the runners screen shows a clear
-  "runners unavailable" notice and the rest of the app still works.
+- **Actions** runners require an **organization admin** token with `admin:org` (fine-grained:
+  *Organization → Self-hosted runners* read); usage **minutes** additionally need org billing
+  access. Without them, the screen shows a clear "unavailable" notice (and, for minutes, `—`)
+  and the rest of the app still works.
+- **Copilot** requires the org to have Copilot Business/Enterprise and a token with
+  `manage_billing:copilot`, `read:org`, or `admin:org`. Without it (or if the org has no
+  Copilot), the Copilot screen shows a clear "unavailable" notice and the rest of the app
+  still works.
 
 ## Run
 
@@ -81,7 +87,8 @@ The landing screen shows live **member** and **repository** counts for the org
 | `Enter` | Open the highlighted area |
 | `u` | Users |
 | `R` | Repositories |
-| `a` | Runners |
+| `a` | Actions |
+| `c` | Copilot |
 | `q` | Quit |
 
 **Member list**
@@ -112,7 +119,13 @@ The landing screen shows live **member** and **repository** counts for the org
 | `r` | Refresh |
 | `o` | Open user on github.com |
 
-**Runners**
+**Actions**
+| Key | Action |
+| --- | --- |
+| `r` | Refresh |
+| `Esc` | Back to home menu |
+
+**Copilot**
 | Key | Action |
 | --- | --- |
 | `r` | Refresh |
@@ -129,16 +142,18 @@ gh_recon/
     base.py       #   transport (_get/_graphql), GitHubError, token resolution
     members.py    #   org members + roles
     repos.py      #   repositories, contributors, commits, languages
-    runners.py    #   Actions self-hosted runners + current-job correlation
+    actions.py    #   Actions usage metrics + self-hosted runners + current-job correlation
     users.py      #   user profile, keys, teams, audit log, commit activity
+    copilot.py    #   Copilot seat billing + usage metrics
     mock.py       #   offline MockClient: synthetic data for --mock
   ui/             # Textual screens, one module per domain
     app.py        #   app shell + org prompt
-    home.py       #   landing menu (Users / Repositories / Runners)
+    home.py       #   landing menu (Users / Repositories / Actions / Copilot)
     members.py    #   member-search screen
     users.py      #   user-detail screen
     repos.py      #   repository list + detail screens
-    runners.py    #   Actions runners screen
+    actions.py    #   Actions usage + runners screen
+    copilot.py    #   Copilot metrics screen
     common.py     #   shared formatting helpers + Paginator
   __main__.py     # CLI entry point
 ```
@@ -153,3 +168,8 @@ GitHub's user-search API has no `org:` qualifier, so org-scoped search is implem
 listing org members and filtering by login client-side, then slicing the requested page —
 the realistic flow for resolving known handles within an org. A substring search therefore
 still lists members to filter; plain browsing pages directly without pulling everything.
+
+The app ships with a neon **`recon`** theme but you can switch themes from Textual's
+command palette (`Ctrl+P` → *Change theme*). Your choice is saved to
+`$XDG_CONFIG_HOME/gh-recon/config.json` (default `~/.config/gh-recon/config.json`) and
+reloaded on the next launch; it falls back to `recon` if the saved theme is unavailable.
