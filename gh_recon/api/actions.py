@@ -132,8 +132,10 @@ class ActionsMixin:
     def actions_usage(self, run_scan_repos: int = 40) -> ActionsUsage:
         """Org Actions usage: billing minutes + a best-effort 30-day run count.
 
-        Minutes come from the org Actions billing endpoint (needs billing
-        access; left ``None`` on 403/404). GitHub has no org-level run count, so
+        Minutes come from the legacy org Actions billing endpoint (needs billing
+        access; left ``None`` on 403/404, or 410 once the org has moved to the
+        new enhanced billing platform, which retired it). GitHub has no
+        org-level run count, so
         runs are summed from each repo's ``actions/runs?created=>=`` ``total_count``
         over the most-recently-pushed repos (bounded by ``run_scan_repos``).
         """
@@ -152,8 +154,11 @@ class ActionsMixin:
                 if v
             }
         except GitHubError as exc:
-            if exc.status not in (403, 404):
-                raise  # only swallow "no access" — surface real errors
+            # 403/404 = no billing access; 410 Gone = org migrated to the new
+            # enhanced billing platform, which retired this endpoint. In all
+            # three cases leave minutes None and degrade. Surface real errors.
+            if exc.status not in (403, 404, 410):
+                raise
 
         since = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
         runs = 0

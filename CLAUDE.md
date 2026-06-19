@@ -101,7 +101,9 @@ Member search/user info need a normal token (`read:org` for full visibility). Th
 **audit log** needs an org-owner token with `read:audit_log` (Enterprise Cloud only).
 **Actions** runners need an org-admin token (`admin:org`, or fine-grained self-hosted
 runners read); usage **minutes** need org billing access (`actions_usage` leaves minutes
-`None` on 403/404 and counts 30-day runs via a bounded per-repo `total_count` scan).
+`None` on 403/404, or 410 once the org moves to the new enhanced billing platform that
+retired the legacy endpoint, and counts 30-day runs via a bounded per-repo `total_count`
+scan).
 **Copilot** (seats + metrics) needs `manage_billing:copilot`/`read:org`/
 `admin:org` and the org to have Copilot Business/Enterprise — `copilot_billing`/
 `copilot_metrics` return `None` (not an error) on 403/404/422 so the screen degrades.
