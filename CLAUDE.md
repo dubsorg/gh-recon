@@ -22,7 +22,7 @@ gh_recon/
     base.py       #   transport: BaseClient (_get/_graphql), GitHubError, resolve_token, parse helpers
     members.py    #   MembersMixin: list/search/count members, org_role
     repos.py      #   ReposMixin: list/search/get/count repos, contributors, commits, languages, readme
-    actions.py    #   ActionsMixin: usage metrics + self-hosted runners (+ runner group, current-job correlation)
+    actions.py    #   ActionsMixin: usage + performance metrics + self-hosted runners (+ runner group, current-job correlation)
     users.py      #   UsersMixin: profile, keys, teams, audit log, authored-commit activity
     copilot.py    #   CopilotMixin: Copilot seat billing + usage metrics
     mock.py       #   MockClient: synthetic data mirroring GitHubClient's surface (--mock)
@@ -33,7 +33,7 @@ gh_recon/
     members.py    #   MembersScreen (member search)
     users.py      #   UserDetailScreen
     repos.py      #   RepositoriesScreen + RepoDetailScreen
-    actions.py    #   ActionsScreen (usage metrics + runners + current job)
+    actions.py    #   ActionsScreen (usage + performance metrics + runners + current job)
     copilot.py    #   CopilotScreen (seats + usage metrics)
     common.py     #   shared formatting helpers (_fmt_dt, _language_chart) + Paginator
     __init__.py   #   re-exports GhReconApp
@@ -103,7 +103,13 @@ Member search/user info need a normal token (`read:org` for full visibility). Th
 runners read); usage **minutes** need org billing access (`actions_usage` leaves minutes
 `None` on 403/404, or 410 once the org moves to the new enhanced billing platform that
 retired the legacy endpoint, and counts 30-day runs via a bounded per-repo `total_count`
-scan).
+scan). **Performance metrics** (`actions_performance`: success rate, avg/median run duration,
+by-conclusion breakdown, plus a per-`(repo, workflow)` breakdown) need no extra scope — they
+sample one page of recent workflow runs per repo over the most-recently-pushed repos (bounded
+by `scan_repos`), skip repos the token can't read, and so describe the sample, not the whole
+org. The breakdown's job count isn't on the runs endpoint, so it's estimated from a bounded,
+round-robin sample of per-run `runs/{id}/jobs` counts (total budget `job_scan_cap`)
+extrapolated to each workflow's run count. Keep both scans bounded.
 **Copilot** (seats + metrics) needs `manage_billing:copilot`/`read:org`/
 `admin:org` and the org to have Copilot Business/Enterprise — `copilot_billing`/
 `copilot_metrics` return `None` (not an error) on 403/404/422 so the screen degrades.

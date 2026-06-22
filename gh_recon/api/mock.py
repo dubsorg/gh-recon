@@ -12,10 +12,12 @@ import base64
 import functools
 import hashlib
 import random
+import statistics
 import time
 from datetime import datetime, timedelta, timezone
 
 from ..models import (
+    ActionsPerformance,
     ActionsUsage,
     AuditEvent,
     CommitInfo,
@@ -29,6 +31,7 @@ from ..models import (
     Runner,
     RunnerJob,
     UserInfo,
+    WorkflowPerformance,
 )
 from .base import DEFAULT_PAGE_SIZE, GitHubError, _paginate_list
 
@@ -436,6 +439,50 @@ class MockClient:
             included_minutes=included,
             minutes_by_os=by_os,
             runs_last_30d=rng.randint(50, 6000),
+        )
+
+    @_latent
+    def actions_performance(
+        self, scan_repos: int = 30, window_days: int = 30, job_scan_cap: int = 300
+    ) -> ActionsPerformance:
+        rng = random.Random(f"{self.org}/actions/perf")
+        repos_scanned = rng.randint(5, scan_repos)
+        # Build a per-(repo, workflow) breakdown, then derive the aggregate from it.
+        workflows: list[WorkflowPerformance] = []
+        by_conclusion = {"success": 0, "failure": 0, "cancelled": 0}
+        durations: list[float] = []
+        for repo in self._repos[:repos_scanned]:
+            for wf in rng.sample(_WORKFLOWS, rng.randint(1, len(_WORKFLOWS))):
+                runs = rng.randint(3, 120)
+                success = int(runs * rng.uniform(0.6, 0.97))
+                failure = rng.randint(0, runs - success)
+                cancelled = runs - success - failure
+                by_conclusion["success"] += success
+                by_conclusion["failure"] += failure
+                by_conclusion["cancelled"] += cancelled
+                avg = rng.uniform(45, 1800)
+                durations.extend([avg] * runs)
+                workflows.append(
+                    WorkflowPerformance(
+                        workflow=wf,
+                        repo=repo.name,
+                        runs=runs,
+                        jobs=runs * rng.randint(1, 6),
+                        has_failures=failure > 0,
+                        avg_duration_s=avg,
+                    )
+                )
+        completed = sum(by_conclusion.values())
+        avg_all = statistics.fmean(durations) if durations else None
+        return ActionsPerformance(
+            window_days=window_days,
+            sampled_runs=completed + rng.randint(0, 40),
+            completed_runs=completed,
+            by_conclusion=by_conclusion,
+            avg_duration_s=avg_all,
+            median_duration_s=avg_all * rng.uniform(0.6, 0.95) if avg_all else None,
+            repos_scanned=repos_scanned,
+            workflows=workflows,
         )
 
     # -- users ------------------------------------------------------------

@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..models import ActionsUsage, Runner, RunnerJob
+from ..models import (
+    ActionsPerformance,
+    ActionsUsage,
+    Runner,
+    RunnerJob,
+    WorkflowPerformance,
+)
 from .base import API_ROOT, GitHubError, _next_link, _parse_iso, _to_utc
 
 
@@ -181,3 +188,149 @@ class ActionsMixin:
             minutes_by_os=by_os,
             runs_last_30d=runs if counted else None,
         )
+
+    def actions_performance(
+        self, scan_repos: int = 30, window_days: int = 30, job_scan_cap: int = 300
+    ) -> ActionsPerformance:
+        """Org Actions performance over the past ``window_days`` (best-effort).
+
+        GitHub has no org-level performance endpoint, so this samples the most
+        recent page of workflow runs created within the window from each of the
+        org's most-recently-pushed repos (bounded by ``scan_repos``) and
+        aggregates conclusions and run durations. Bounded and best-effort: runs
+        beyond the first page per repo, or on repos outside the scan window,
+        aren't counted, so the figures describe the sample rather than the org.
+
+        Runs are also grouped per ``(repo, workflow)`` into a breakdown
+        (``workflows``). Job counts aren't carried on the runs endpoint, so
+        ``WorkflowPerformance.jobs`` is estimated from a bounded, round-robin
+        sample of per-run job counts (total budget ``job_scan_cap``) extrapolated
+        to each workflow's run count — fair across workflows but still an estimate.
+        """
+        since = (
+            datetime.now(timezone.utc) - timedelta(days=window_days)
+        ).date().isoformat()
+        by_conclusion: dict[str, int] = {}
+        durations: list[float] = []
+        sampled = completed = repos_scanned = 0
+        # (repo_name, workflow) -> aggregation, including run ids for job sampling.
+        agg: dict[tuple[str, str], dict[str, Any]] = {}
+        for repo in self._list_all_repos(max_results=scan_repos):
+            try:
+                runs = (
+                    self._get(
+                        f"{API_ROOT}/repos/{repo.full_name}/actions/runs",
+                        params={"created": f">={since}", "per_page": 100},
+                    )
+                    .json()
+                    .get("workflow_runs", [])
+                )
+            except GitHubError:
+                continue  # Actions disabled or inaccessible — skip
+            repos_scanned += 1
+            for run in runs:
+                sampled += 1
+                if run.get("status") != "completed":
+                    continue  # queued / in_progress — no duration or conclusion yet
+                completed += 1
+                concl = run.get("conclusion") or "unknown"
+                by_conclusion[concl] = by_conclusion.get(concl, 0) + 1
+                wf = run.get("name") or run.get("display_title") or "?"
+                row = agg.setdefault(
+                    (repo.name, wf),
+                    {
+                        "full_name": repo.full_name,
+                        "runs": 0,
+                        "durations": [],
+                        "fail": False,
+                        "run_ids": [],
+                    },
+                )
+                row["runs"] += 1
+                if run.get("id") is not None:
+                    row["run_ids"].append(run["id"])
+                if concl == "failure":
+                    row["fail"] = True
+                start = _to_utc(
+                    _parse_iso(run.get("run_started_at") or run.get("created_at"))
+                )
+                end = _to_utc(_parse_iso(run.get("updated_at")))
+                if start and end and end >= start:
+                    dur = (end - start).total_seconds()
+                    durations.append(dur)
+                    row["durations"].append(dur)
+
+        jobs_by_key = self._sample_job_counts(agg, job_scan_cap)
+        workflows = [
+            WorkflowPerformance(
+                workflow=wf,
+                repo=repo_name,
+                runs=row["runs"],
+                jobs=jobs_by_key[(repo_name, wf)],
+                has_failures=row["fail"],
+                avg_duration_s=(
+                    statistics.fmean(row["durations"]) if row["durations"] else None
+                ),
+            )
+            for (repo_name, wf), row in agg.items()
+        ]
+
+        return ActionsPerformance(
+            window_days=window_days,
+            sampled_runs=sampled,
+            completed_runs=completed,
+            by_conclusion=by_conclusion,
+            avg_duration_s=statistics.fmean(durations) if durations else None,
+            median_duration_s=statistics.median(durations) if durations else None,
+            repos_scanned=repos_scanned,
+            workflows=workflows,
+        )
+
+    def _sample_job_counts(
+        self, agg: dict[tuple[str, str], dict[str, Any]], budget: int
+    ) -> dict[tuple[str, str], int]:
+        """Estimate total jobs per workflow group within a global call budget.
+
+        The runs endpoint has no job count, so this round-robins a bounded number
+        of ``runs/{id}/jobs`` ``total_count`` lookups across groups (so every
+        workflow is sampled before any is sampled twice) and extrapolates each
+        group's mean jobs-per-run to its full run count. Best-effort: groups left
+        unsampled when the budget runs out report ``0``.
+        """
+        sampled_sum: dict[tuple[str, str], int] = {k: 0 for k in agg}
+        sampled_n: dict[tuple[str, str], int] = {k: 0 for k in agg}
+        # Round-robin: one run id per group per pass until the budget is spent.
+        cursors = {k: 0 for k in agg}
+        spent = 0
+        progressed = True
+        while spent < budget and progressed:
+            progressed = False
+            for key, row in agg.items():
+                if spent >= budget:
+                    break
+                idx = cursors[key]
+                if idx >= len(row["run_ids"]):
+                    continue
+                cursors[key] = idx + 1
+                progressed = True
+                spent += 1
+                sampled_sum[key] += self._run_job_count(
+                    row["full_name"], row["run_ids"][idx]
+                )
+                sampled_n[key] += 1
+        jobs: dict[tuple[str, str], int] = {}
+        for key, row in agg.items():
+            n = sampled_n[key]
+            jobs[key] = round(sampled_sum[key] / n * row["runs"]) if n else 0
+        return jobs
+
+    def _run_job_count(self, full_name: str, run_id: int) -> int:
+        """Total job count for one workflow run (0 if inaccessible)."""
+        try:
+            data = self._get(
+                f"{API_ROOT}/repos/{full_name}/actions/runs/{run_id}/jobs",
+                params={"per_page": 1},
+            ).json()
+            return int(data.get("total_count", 0))
+        except GitHubError:
+            return 0
