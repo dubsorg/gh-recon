@@ -1,10 +1,12 @@
-"""API explorer: a curated catalog of org/enterprise endpoints + a raw caller.
+"""API explorer: the full org/enterprise endpoint catalog + a raw caller.
 
 This is the backend for the explorer screen. The catalog (:func:`build_catalog`)
-is a hand-picked set of org-scoped and GitHub Enterprise Cloud REST endpoints
-relevant to recon; :meth:`ExplorerMixin.api_call` issues an arbitrary request and
-returns an :class:`ApiResponse` with the body kept raw (errors included) so the
-UI can show exactly what GitHub returned.
+is generated from GitHub's OpenAPI description — see ``scripts/gen_catalog.py``,
+which writes :mod:`gh_recon.api._catalog_data` — filtered to org-scoped and
+GitHub Enterprise Cloud REST endpoints (plus a few utility paths).
+:meth:`ExplorerMixin.api_call` issues an arbitrary request and returns an
+:class:`ApiResponse` with the body kept raw (errors included) so the UI can show
+exactly what GitHub returned.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 import requests
 
 from ..models import ApiEndpoint, ApiResponse
+from ._catalog_data import ENDPOINTS
 from .base import GitHubError
 
 # Response headers worth surfacing in the explorer (rate-limit budget, etc.).
@@ -30,148 +33,18 @@ _MAX_BODY = 200_000
 
 
 def build_catalog(org: str) -> list[ApiEndpoint]:
-    """Curated org- and enterprise-scoped REST endpoints, in display order.
+    """The full org/enterprise REST catalog from GitHub's OpenAPI description.
 
-    ``{org}`` is pre-filled from the client scope by the UI; ``{enterprise}`` and
-    other placeholders (``{username}``, ``{repo}``) are filled in by the user.
+    Built from :data:`gh_recon.api._catalog_data.ENDPOINTS`, generated offline by
+    ``scripts/gen_catalog.py`` so the extension needs no extra dependency or
+    network call to populate the explorer. ``{org}`` is pre-filled from the client
+    scope by the UI; other placeholders (``{enterprise}``, ``{username}``, …) are
+    filled in by the user. ``org`` is accepted for signature parity with the
+    callers (real + mock clients) but isn't needed — paths stay templated.
     """
     return [
-        # -- Organization (read) -----------------------------------------
-        ApiEndpoint("GET", "/orgs/{org}", "Get the organization", "Organization"),
-        ApiEndpoint("GET", "/orgs/{org}/members", "List org members", "Organization"),
-        ApiEndpoint("GET", "/orgs/{org}/teams", "List teams", "Organization"),
-        ApiEndpoint("GET", "/orgs/{org}/repos", "List org repositories", "Organization"),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/outside_collaborators",
-            "List outside collaborators", "Organization",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/installations",
-            "List GitHub App installations", "Organization",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/audit-log",
-            "Org audit log (Enterprise Cloud)", "Organization",
-            scope="read:audit_log (org owner)",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/personal-access-tokens",
-            "List fine-grained PATs with org access", "Organization",
-            scope="admin:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/properties/values",
-            "List custom property values for repos", "Organization",
-        ),
-        # -- Actions ------------------------------------------------------
-        ApiEndpoint(
-            "GET", "/orgs/{org}/actions/runners",
-            "List self-hosted runners", "Actions", scope="admin:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/actions/runner-groups",
-            "List runner groups", "Actions", scope="admin:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/actions/secrets",
-            "List org Actions secrets (names only)", "Actions", scope="admin:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/actions/permissions",
-            "Get Actions permissions policy", "Actions", scope="admin:org",
-        ),
-        # -- Security -----------------------------------------------------
-        ApiEndpoint(
-            "GET", "/orgs/{org}/secret-scanning/alerts",
-            "List secret-scanning alerts", "Security",
-            scope="repo / security_events",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/dependabot/alerts",
-            "List Dependabot alerts", "Security", scope="security_events",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/code-scanning/alerts",
-            "List code-scanning alerts", "Security", scope="security_events",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/code-security/configurations",
-            "List code-security configurations", "Security", scope="admin:org",
-        ),
-        # -- Copilot ------------------------------------------------------
-        ApiEndpoint(
-            "GET", "/orgs/{org}/copilot/billing",
-            "Copilot seat breakdown", "Copilot",
-            scope="manage_billing:copilot / read:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/copilot/billing/seats",
-            "List Copilot seat assignments", "Copilot",
-            scope="manage_billing:copilot / read:org",
-        ),
-        ApiEndpoint(
-            "GET", "/orgs/{org}/copilot/metrics",
-            "Copilot usage metrics", "Copilot", scope="manage_billing:copilot",
-        ),
-        # -- Enterprise Cloud (read) -------------------------------------
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/audit-log",
-            "Enterprise audit log", "Enterprise",
-            scope="read:audit_log (enterprise admin)",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/consumed-licenses",
-            "Consumed license breakdown", "Enterprise", scope="enterprise admin",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/copilot/billing/seats",
-            "Enterprise Copilot seat assignments", "Enterprise",
-            scope="manage_billing:copilot (enterprise)",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/copilot/metrics",
-            "Enterprise Copilot usage metrics", "Enterprise",
-            scope="manage_billing:copilot (enterprise)",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/secret-scanning/alerts",
-            "Enterprise secret-scanning alerts", "Enterprise",
-            scope="enterprise admin",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/code-security/configurations",
-            "Enterprise code-security configurations", "Enterprise",
-            scope="enterprise admin",
-        ),
-        ApiEndpoint(
-            "GET", "/enterprises/{enterprise}/properties/schema",
-            "Custom property schema", "Enterprise", scope="enterprise admin",
-        ),
-        # -- Account / meta ----------------------------------------------
-        ApiEndpoint("GET", "/user", "The authenticated user", "Account"),
-        ApiEndpoint("GET", "/rate_limit", "Current rate-limit status", "Account"),
-        ApiEndpoint("GET", "/meta", "GitHub meta information", "Account"),
-        # -- Mutations (require confirmation) ----------------------------
-        ApiEndpoint(
-            "PATCH", "/orgs/{org}", "Update org settings", "Mutations",
-            scope="admin:org",
-        ),
-        ApiEndpoint(
-            "POST", "/orgs/{org}/repos", "Create an org repository", "Mutations",
-            scope="repo / admin:org",
-        ),
-        ApiEndpoint(
-            "PUT", "/orgs/{org}/memberships/{username}",
-            "Set org membership for a user", "Mutations", scope="admin:org",
-        ),
-        ApiEndpoint(
-            "DELETE", "/orgs/{org}/members/{username}",
-            "Remove a member from the org", "Mutations", scope="admin:org",
-        ),
-        ApiEndpoint(
-            "DELETE", "/orgs/{org}/outside_collaborators/{username}",
-            "Remove an outside collaborator", "Mutations", scope="admin:org",
-        ),
+        ApiEndpoint(method, path, summary, category)
+        for method, path, summary, category in ENDPOINTS
     ]
 
 
