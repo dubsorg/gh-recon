@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import functools
 import hashlib
+import json
 import random
 import statistics
 import time
@@ -19,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from ..models import (
     ActionsPerformance,
     ActionsUsage,
+    ApiEndpoint,
+    ApiResponse,
     AuditEvent,
     CommitInfo,
     CopilotBilling,
@@ -33,7 +36,8 @@ from ..models import (
     UserInfo,
     WorkflowPerformance,
 )
-from .base import DEFAULT_PAGE_SIZE, GitHubError, _paginate_list
+from .base import API_ROOT, DEFAULT_PAGE_SIZE, GitHubError, _paginate_list
+from .explorer import build_catalog
 
 _FIRST = [
     "ada", "alan", "grace", "linus", "margaret", "dennis", "ken", "barbara",
@@ -73,6 +77,22 @@ def _latent(method):
         return method(self, *args, **kwargs)
 
     return wrapper
+
+
+def _int_param(params: dict | None, key: str, default: int) -> int:
+    try:
+        return int((params or {}).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _paginate(items: list, params: dict | None):
+    """Slice a list per GitHub's page/per_page; return (chunk, has_prev, has_next)."""
+    per_page = max(1, _int_param(params, "per_page", 10))
+    page = max(1, _int_param(params, "page", 1))
+    start = (page - 1) * per_page
+    chunk = items[start : start + per_page]
+    return chunk, page > 1, start + per_page < len(items)
 
 
 class MockClient:
@@ -484,6 +504,90 @@ class MockClient:
             repos_scanned=repos_scanned,
             workflows=workflows,
         )
+
+    # -- api explorer -----------------------------------------------------
+
+    def api_endpoints(self) -> list[ApiEndpoint]:
+        return build_catalog(self.org)
+
+    @_latent
+    def api_call(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, str] | None = None,
+        body: str | None = None,
+    ) -> ApiResponse:
+        """Synthetic explorer response — no network, deterministic per path."""
+        method = method.upper()
+        if body and body.strip():
+            try:
+                json.loads(body)
+            except ValueError as exc:
+                raise GitHubError(f"request body is not valid JSON: {exc}") from exc
+        rng = random.Random(f"{self.org}/api{method}{path}")
+        url = f"{API_ROOT}{path}"
+        if params:
+            from urllib.parse import urlencode
+
+            url += "?" + urlencode(params)
+
+        has_next = has_prev = False
+        if method == "DELETE":
+            payload, status, reason = "", 204, "No Content"
+            is_json = False
+        else:
+            payload, status, reason = self._mock_payload(method, path, rng)
+            is_json = True
+            # Emulate GitHub's page/per_page + Link-header pagination on lists.
+            if isinstance(payload, list):
+                payload, has_prev, has_next = _paginate(payload, params)
+        return ApiResponse(
+            method=method,
+            url=url,
+            status=status,
+            reason=reason,
+            elapsed_ms=rng.randint(40, 400),
+            content_type="application/json; charset=utf-8" if is_json else "",
+            body=json.dumps(payload, indent=2) if is_json else "",
+            is_json=is_json,
+            data=payload if is_json else None,
+            rate_limit={
+                "X-RateLimit-Limit": "5000",
+                "X-RateLimit-Remaining": str(rng.randint(4000, 4999)),
+                "X-RateLimit-Used": str(rng.randint(1, 1000)),
+            },
+            has_next=has_next,
+            has_prev=has_prev,
+        )
+
+    def _mock_payload(self, method: str, path: str, rng: random.Random):
+        """Build a plausible JSON payload + (status, reason) for a mock call."""
+        if method == "POST":
+            return {"id": rng.randint(10**6, 10**8), "created": True}, 201, "Created"
+        if method in ("PATCH", "PUT"):
+            return {"id": rng.randint(10**6, 10**8), "updated": True}, 200, "OK"
+        # GET: list endpoints return arrays, single resources return objects.
+        if path.rstrip("/").split("/")[-1] in (
+            "members", "repos", "teams", "runners", "alerts", "seats",
+            "installations", "outside_collaborators",
+        ) or path.endswith("audit-log"):
+            rows = [
+                {
+                    "id": rng.randint(1, 10**6),
+                    "name": rng.choice(_REPO_WORDS) + f"-{i}",
+                    "type": rng.choice(["User", "Organization", "Repository"]),
+                    "state": rng.choice(["active", "open", "dismissed", "resolved"]),
+                    "visibility": rng.choice(["public", "private", "internal"]),
+                    "created_at": (self._now - timedelta(days=rng.randint(1, 900)))
+                    .isoformat(),
+                    # a nested object — the table should skip it, raw view keeps it.
+                    "owner": {"login": self.org, "id": rng.randint(1, 10**6)},
+                }
+                for i in range(rng.randint(0, 45))
+            ]
+            return rows, 200, "OK"
+        return {"login": self.org, "id": rng.randint(1, 10**6)}, 200, "OK"
 
     # -- users ------------------------------------------------------------
 

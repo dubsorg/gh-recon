@@ -85,6 +85,27 @@ class BaseClient:
             raise GitHubError(f"HTTP {resp.status_code}: {msg}", resp.status_code)
         return resp
 
+    def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+    ) -> requests.Response:
+        """Issue an arbitrary request and return the raw response.
+
+        Unlike :meth:`_get`, this does **not** raise on HTTP error statuses —
+        the API explorer wants to display 4xx/5xx bodies verbatim. Only genuine
+        transport failures raise :class:`GitHubError`.
+        """
+        url = path if path.startswith("http") else f"{API_ROOT}{path}"
+        try:
+            return self.session.request(
+                method.upper(), url, params=params, json=json_body, timeout=30
+            )
+        except requests.RequestException as exc:
+            raise GitHubError(f"network error: {exc}") from exc
+
     def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         try:
             resp = self.session.post(

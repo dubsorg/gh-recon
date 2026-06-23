@@ -19,22 +19,24 @@ gh_recon/
   models.py       # dataclasses shared by both layers (Member, Repo, UserInfo, …)
   config.py       # tiny JSON prefs under XDG config dir (persists the selected theme)
   api/            # requests-based GitHub client; returns dataclasses, raises GitHubError
-    base.py       #   transport: BaseClient (_get/_graphql), GitHubError, resolve_token, parse helpers
+    base.py       #   transport: BaseClient (_get/_request/_graphql), GitHubError, resolve_token, parse helpers
     members.py    #   MembersMixin: list/search/count members, org_role
     repos.py      #   ReposMixin: list/search/get/count repos, contributors, commits, languages, readme
     actions.py    #   ActionsMixin: usage + performance metrics + self-hosted runners (+ runner group, current-job correlation)
     users.py      #   UsersMixin: profile, keys, teams, audit log, authored-commit activity
     copilot.py    #   CopilotMixin: Copilot seat billing + usage metrics
+    explorer.py   #   ExplorerMixin: curated org/enterprise endpoint catalog + raw api_call (build_catalog)
     mock.py       #   MockClient: synthetic data mirroring GitHubClient's surface (--mock)
     __init__.py   #   assembles GitHubClient from the mixins; re-exports GitHubError, resolve_token, MockClient
   ui/             # Textual presentation layer, one module per domain
     app.py        #   GhReconApp shell + OrgPromptScreen
-    home.py       #   HomeScreen landing menu (Users / Repositories / Actions / Copilot)
+    home.py       #   HomeScreen landing menu (Users / Repositories / Actions / Copilot / API Explorer)
     members.py    #   MembersScreen (member search)
     users.py      #   UserDetailScreen
     repos.py      #   RepositoriesScreen + RepoDetailScreen
     actions.py    #   ActionsScreen (usage + performance metrics + runners + current job)
     copilot.py    #   CopilotScreen (seats + usage metrics)
+    explorer.py   #   ApiExplorerScreen (grouped endpoint tree + request builder + response) + ConfirmScreen
     common.py     #   shared formatting helpers (_fmt_dt, _language_chart) + Paginator
     __init__.py   #   re-exports GhReconApp
   __main__.py     # CLI entry point + token resolution
@@ -126,6 +128,29 @@ the "Default" group. The screen renders runners grouped by group name.
 
 GitHub's search API has no `org:` qualifier, so org-scoped user search is done by
 listing members (paginated) and filtering by login client-side. Preserve that.
+
+The **API explorer** (`ExplorerMixin` + `ApiExplorerScreen`) is a curated catalog of
+org- and Enterprise-Cloud REST endpoints (`build_catalog(org)` in `api/explorer.py`)
+plus a raw caller (`api_call(method, path, params, body)`). It uses `BaseClient._request`,
+which — unlike `_get` — does **not** raise on HTTP error statuses, so 4xx/5xx bodies are
+displayed verbatim; only bad JSON bodies and transport failures raise `GitHubError`.
+Catalog paths are templates with `{org}`/`{enterprise}`/`{username}` placeholders; the
+screen pre-fills `{org}` and the user fills the rest. The catalog renders as a collapsible
+`Tree` grouped by path prefix (`_group_of` → `/orgs/{org}`, `/enterprises/{enterprise}`, or
+`/` for top-level), each leaf tagged with a fixed-width colored method pill (`_method_badge`,
+glyphs in `_METHOD_GLYPH`); the `ApiEndpoint` rides on the leaf's `node.data`. List
+responses (`ApiResponse.data` is a list of objects, or a wrapper dict whose first list
+value is — see `_extract_rows`) render in a `DataTable` with columns auto-deduced
+(`_columns`: scalar fields only, identifying ones first, capped); `v` / a button toggles
+to the raw JSON. Keep `ApiResponse.data` populated (real + mock) so the table can build.
+Paged list responses get an `n`/`p` pager (default `per_page=10`); the screen owns the
+page counter and injects `page`/`per_page` into GET requests, while `ApiResponse.has_next`
+/`has_prev` (parsed from the Link header via `_link_rels`, emulated by the mock's
+`_paginate`) drive the pager's enabled state. The table is theme-styled via DataTable
+component classes (`datatable--header/odd-row/even-row/cursor`) in the screen CSS. All HTTP verbs are allowed, but
+mutating ones (`models.WRITE_METHODS`: POST/PATCH/PUT/DELETE — see `ApiEndpoint.mutates`)
+route through `ConfirmScreen` before sending. When you add/remove catalog entries, edit
+only `build_catalog` — both the real and mock clients read from it, so they stay in sync.
 
 ## When you change things
 
