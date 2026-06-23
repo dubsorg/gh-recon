@@ -10,6 +10,7 @@ from __future__ import annotations
 from .actions import ActionsMixin
 from .base import BaseClient, GitHubError, resolve_token
 from .copilot import CopilotMixin
+from .explorer import ExplorerMixin
 from .members import MembersMixin
 from .mock import MockClient
 from .repos import ReposMixin
@@ -17,7 +18,13 @@ from .users import UsersMixin
 
 
 class GitHubClient(
-    MembersMixin, ReposMixin, ActionsMixin, UsersMixin, CopilotMixin, BaseClient
+    MembersMixin,
+    ReposMixin,
+    ActionsMixin,
+    UsersMixin,
+    CopilotMixin,
+    ExplorerMixin,
+    BaseClient,
 ):
     """GitHub REST client scoped to a single org (``self.org``)."""
 

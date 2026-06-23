@@ -221,3 +221,56 @@ class CopilotMetrics:
     engaged_users_latest: int
     active_users_peak: int
     languages: list[CopilotLangStat] = field(default_factory=list)
+
+
+# Mutating HTTP methods — calls the explorer must confirm before sending.
+WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
+
+
+@dataclass
+class ApiEndpoint:
+    """One entry in the curated API-explorer catalog.
+
+    ``path`` is a template with ``{param}`` placeholders (e.g. ``{org}``,
+    ``{enterprise}``, ``{username}``). The UI resolves placeholders before the
+    call; ``{org}`` is pre-filled from the client's org scope.
+    """
+
+    method: str  # HTTP verb, upper-case
+    path: str  # template, e.g. "/orgs/{org}/members"
+    summary: str  # one-line description
+    category: str  # group heading (Organization, Enterprise, …)
+    scope: str | None = None  # token scope / plan note, if any
+
+    @property
+    def mutates(self) -> bool:
+        return self.method in WRITE_METHODS
+
+    @property
+    def params(self) -> list[str]:
+        """Placeholder names in ``path``, in order (e.g. ['org', 'username'])."""
+        import re
+
+        return re.findall(r"\{([^}]+)\}", self.path)
+
+
+@dataclass
+class ApiResponse:
+    """Result of one explorer call — kept raw so errors are inspectable too."""
+
+    method: str
+    url: str
+    status: int
+    reason: str
+    elapsed_ms: int
+    content_type: str
+    body: str  # decoded text (pretty-printed if JSON)
+    is_json: bool
+    data: Any = None  # parsed JSON (list/dict) when is_json, for tabular rendering
+    rate_limit: dict[str, str] = field(default_factory=dict)
+    has_next: bool = False  # a rel="next" page exists (from the Link header)
+    has_prev: bool = False  # a rel="prev" page exists
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 300

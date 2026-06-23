@@ -14,6 +14,7 @@ from textual.widgets.option_list import Option
 from ..api import GitHubClient, GitHubError
 from .actions import ActionsScreen
 from .copilot import CopilotScreen
+from .explorer import ApiExplorerScreen
 from .members import MembersScreen
 from .repos import RepositoriesScreen
 
@@ -65,6 +66,7 @@ class HomeScreen(Screen):
         Binding("R", "open_repos", "Repositories"),
         Binding("a", "open_actions", "Actions"),
         Binding("c", "open_copilot", "Copilot"),
+        Binding("e", "open_explorer", "API Explorer"),
         Binding("enter", "open_selected", "Open", show=False),
         Binding("q", "app.quit", "Quit"),
     ]
@@ -103,6 +105,7 @@ class HomeScreen(Screen):
                 Option("Repositories   browse org repositories and their detail", id="repos"),
                 Option("Actions        usage metrics + self-hosted runners", id="actions"),
                 Option("Copilot        org Copilot seats and usage metrics", id="copilot"),
+                Option("API Explorer   call curated org/enterprise REST endpoints", id="explorer"),
                 id="home-menu",
             )
         yield Footer()
@@ -182,6 +185,9 @@ class HomeScreen(Screen):
     def action_open_copilot(self) -> None:
         self._open("copilot")
 
+    def action_open_explorer(self) -> None:
+        self._open("explorer")
+
     def _open(self, area: str | None) -> None:
         if area == "users":
             self.app.push_screen(MembersScreen(self.client))
@@ -191,3 +197,5 @@ class HomeScreen(Screen):
             self.app.push_screen(ActionsScreen(self.client))
         elif area == "copilot":
             self.app.push_screen(CopilotScreen(self.client))
+        elif area == "explorer":
+            self.app.push_screen(ApiExplorerScreen(self.client))
