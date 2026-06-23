@@ -8,6 +8,7 @@ confirmation modal first. Responses (including 4xx/5xx bodies) render raw.
 
 from __future__ import annotations
 
+import shlex
 from urllib.parse import parse_qsl
 
 from rich.syntax import Syntax
@@ -16,6 +17,7 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.reactive import reactive
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
@@ -31,6 +33,7 @@ from textual.widgets import (
 from textual.widgets.tree import TreeNode
 
 from ..api import GitHubClient, GitHubError
+from ..api.base import API_ROOT
 from ..models import ApiEndpoint, ApiResponse
 
 _METHOD_COLOR = {
@@ -70,27 +73,27 @@ def _method_badge(method: str) -> Text:
     return badge
 
 
-def _group_of(path: str) -> tuple[str, str]:
-    """Split a path into (group prefix, relative remainder) for the tree.
+def _short_path(path: str) -> str:
+    """Path with a leading ``/orgs/{org}`` or ``/enterprises/{enterprise}`` stripped.
 
-    Scoped collections collapse under their owner — ``/orgs/{org}`` and
-    ``/enterprises/{enterprise}`` — so e.g. ``/orgs/{org}/members`` lands under
-    the ``/orgs/{org}`` group as ``/members``. Top-level paths (``/user``,
-    ``/rate_limit``) fall under a ``/`` group. The remainder is ``/`` for the
-    group's own resource (e.g. ``GET /orgs/{org}``).
+    The tree groups by category, so the scope is already implied; leaves show
+    just the distinguishing tail (e.g. ``/actions/runners``) to stay readable in
+    the narrow catalog pane. The request pane still shows the full resolved path.
+    Returns ``/`` for a group's own resource (``GET /orgs/{org}``) and the full
+    path for un-scoped endpoints (``/user``, ``/rate_limit``).
     """
     parts = path.strip("/").split("/")
     if len(parts) >= 2 and parts[0] in ("orgs", "enterprises"):
         prefix = "/" + "/".join(parts[:2])
-        return prefix, path[len(prefix):] or "/"
-    return "/", path
+        return path[len(prefix):] or "/"
+    return path
 
 
-def _group_label(prefix: str, count: int) -> Text:
-    """Folder icon + bold prefix + dim count, e.g. ``📁 /orgs/{org}  (12)``."""
+def _group_label(category: str, count: int) -> Text:
+    """Folder icon + bold category + dim count, e.g. ``📁 actions  (98)``."""
     return (
         Text(f"{_GROUP_GLYPH} ")
-        + Text(prefix, style="bold")
+        + Text(category, style="bold")
         + Text(f"  ({count})", style="dim")
     )
 
@@ -158,6 +161,24 @@ def _to_int(value: object, default: int) -> int:
         return default
 
 
+def _curl_snippet(method: str, url: str, body: str) -> str:
+    """Build a copy-pasteable ``curl`` for a request, with a token placeholder.
+
+    Mirrors the headers the client actually sends (see ``BaseClient``); the real
+    token is never embedded — the snippet reads ``$GH_TOKEN`` from the env.
+    """
+    parts = ["curl -L"]
+    if method != "GET":
+        parts.append(f"-X {method}")
+    parts.append('-H "Accept: application/vnd.github+json"')
+    parts.append('-H "Authorization: Bearer $GH_TOKEN"')
+    parts.append('-H "X-GitHub-Api-Version: 2022-11-28"')
+    if body.strip():
+        parts.append(f"-d {shlex.quote(body)}")
+    parts.append(f'"{url}"')
+    return " \\\n  ".join(parts)
+
+
 class ConfirmScreen(ModalScreen[bool]):
     """Yes/No confirmation for a mutating request."""
 
@@ -174,20 +195,31 @@ class ConfirmScreen(ModalScreen[bool]):
     #confirm-buttons Button { margin: 0 1; }
     """
 
-    def __init__(self, method: str, path: str) -> None:
+    _DEFAULT_MESSAGE = (
+        "This is a [b]mutating[/b] request that can change org state. Send it?"
+    )
+
+    def __init__(
+        self,
+        method: str,
+        path: str,
+        *,
+        message: str | None = None,
+        confirm_label: str = "Send (y)",
+    ) -> None:
         super().__init__()
         self._method = method
         self._path = path
+        self._message = message or self._DEFAULT_MESSAGE
+        self._confirm_label = confirm_label
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-box"):
             yield Label(
-                f"[b $error]{self._method}[/] [b]{self._path}[/]\n\n"
-                "This is a [b]mutating[/b] request that can change org state. "
-                "Send it?"
+                f"[b $error]{self._method}[/] [b]{self._path}[/]\n\n{self._message}"
             )
             with Horizontal(id="confirm-buttons"):
-                yield Button("Send (y)", variant="error", id="yes")
+                yield Button(self._confirm_label, variant="error", id="yes")
                 yield Button("Cancel (Esc)", id="no")
 
     @on(Button.Pressed, "#yes")
@@ -199,17 +231,68 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ShellSnippetScreen(ModalScreen[None]):
+    """Show a copy-pasteable ``curl`` snippet for the composed request."""
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("c", "copy", "Copy"),
+    ]
+
+    CSS = """
+    ShellSnippetScreen { align: center middle; }
+    #snippet-box { width: 90%; max-width: 110; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    #snippet-title { text-style: bold; margin-bottom: 1; }
+    #snippet-body { height: auto; margin-bottom: 1; }
+    #snippet-buttons { height: auto; align-horizontal: center; }
+    #snippet-buttons Button { margin: 0 1; }
+    """
+
+    def __init__(self, snippet: str) -> None:
+        super().__init__()
+        self._snippet = snippet
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="snippet-box"):
+            yield Label("Shell snippet  ·  $GH_TOKEN = your token", id="snippet-title")
+            yield Static(
+                Syntax(self._snippet, "bash", theme="ansi_dark", word_wrap=True),
+                id="snippet-body",
+            )
+            with Horizontal(id="snippet-buttons"):
+                yield Button("Copy (c)", variant="primary", id="copy")
+                yield Button("Close (Esc)", id="close")
+
+    @on(Button.Pressed, "#copy")
+    def action_copy(self) -> None:
+        self.app.copy_to_clipboard(self._snippet)
+        self.notify("Snippet copied to clipboard.")
+
+    @on(Button.Pressed, "#close")
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class ApiExplorerScreen(Screen):
     """Browse and call curated org/enterprise REST endpoints."""
 
     BINDINGS = [
         Binding("slash", "focus_filter", "Filter"),
         Binding("s", "send", "Send"),
+        Binding("c", "show_curl", "cURL"),
         Binding("v", "toggle_view", "Table/Raw"),
         Binding("n", "next_page", "Next page"),
         Binding("p", "prev_page", "Prev page"),
+        Binding("left_square_bracket", "shrink_catalog", "Narrower", key_display="["),
+        Binding("right_square_bracket", "grow_catalog", "Wider", key_display="]"),
         Binding("escape", "app.pop_screen", "Back"),
     ]
+
+    # Catalog-pane width is adjustable at runtime with [ / ]; clamped to this range.
+    CATALOG_MIN_WIDTH = 30
+    CATALOG_MAX_WIDTH = 90
+    CATALOG_WIDTH_STEP = 4
+    catalog_width: reactive[int] = reactive(48)
 
     CSS = """
     #explorer-main { height: 1fr; }
@@ -218,6 +301,8 @@ class ApiExplorerScreen(Screen):
     #endpoint-tree { height: 1fr; }
     #request-pane { width: 1fr; padding: 0 1; }
     #endpoint-summary { height: auto; padding: 0 0 1 0; }
+    #mutation-warning { height: auto; display: none; margin-bottom: 1; padding: 0 1; border: round $warning; color: $warning; text-style: bold; }
+    #mutation-warning.delete { border: round $error; color: $error; }
     .field-label { color: $text-muted; height: 1; }
     #path-input, #query-input { margin-bottom: 1; }
     #body-input { height: 6; margin-bottom: 1; }
@@ -263,6 +348,7 @@ class ApiExplorerScreen(Screen):
                 yield tree
             with Vertical(id="request-pane"):
                 yield Static("", id="endpoint-summary")
+                yield Static("", id="mutation-warning")
                 yield Label("Path", classes="field-label")
                 yield Input(id="path-input", placeholder="/orgs/{org}")
                 yield Label("Query  (key=value&key=value)", classes="field-label")
@@ -290,34 +376,54 @@ class ApiExplorerScreen(Screen):
         self.sub_title = f"org: {self.client.org} / api explorer"
         self._all = self.client.api_endpoints()
         groups = self._populate(self._all)
-        # Default to collapsed groups (saves space); open the first one and
+        # Default to collapsed groups (saves space); open the first category and
         # pre-select its first endpoint so the request pane isn't empty.
         if self._all:
-            first_prefix = _group_of(self._all[0].path)[0]
-            groups[first_prefix].expand()
-            self._select(self._all[0])
+            first = sorted(self._all, key=lambda e: e.category)[0]
+            groups[first.category].expand()
+            self._select(first)
         self.query_one("#endpoint-tree", Tree).focus()
 
     def _populate(
         self, endpoints: list[ApiEndpoint], *, expand: bool = False
     ) -> dict[str, TreeNode]:
-        """Rebuild the grouped tree; returns the group prefix → node map."""
+        """Rebuild the category-grouped tree; returns the category → node map.
+
+        Endpoints are sorted by category (a stable sort, so each category keeps
+        the catalog's path order) and collapsed under one folder per category.
+        """
         tree = self.query_one("#endpoint-tree", Tree)
         tree.clear()
         groups: dict[str, TreeNode] = {}
-        for ep in endpoints:
-            prefix, rel = _group_of(ep.path)
-            grp = groups.get(prefix)
+        for ep in sorted(endpoints, key=lambda e: e.category):
+            grp = groups.get(ep.category)
             if grp is None:
-                grp = tree.root.add(prefix, expand=expand)
-                groups[prefix] = grp
-            grp.add_leaf(_method_badge(ep.method) + Text(f" {rel}"), data=ep)
-        for prefix, grp in groups.items():
-            grp.set_label(_group_label(prefix, len(grp.children)))
+                grp = tree.root.add(ep.category, expand=expand)
+                groups[ep.category] = grp
+            grp.add_leaf(
+                _method_badge(ep.method) + Text(f" {_short_path(ep.path)}"), data=ep
+            )
+        for category, grp in groups.items():
+            grp.set_label(_group_label(category, len(grp.children)))
         return groups
 
     def action_focus_filter(self) -> None:
         self.query_one("#endpoint-filter", Input).focus()
+
+    def watch_catalog_width(self, width: int) -> None:
+        """Apply the catalog pane width whenever the reactive changes (live resize)."""
+        if self.is_mounted:
+            self.query_one("#catalog-pane").styles.width = width
+
+    def action_grow_catalog(self) -> None:
+        self.catalog_width = min(
+            self.CATALOG_MAX_WIDTH, self.catalog_width + self.CATALOG_WIDTH_STEP
+        )
+
+    def action_shrink_catalog(self) -> None:
+        self.catalog_width = max(
+            self.CATALOG_MIN_WIDTH, self.catalog_width - self.CATALOG_WIDTH_STEP
+        )
 
     @on(Input.Changed, "#endpoint-filter")
     def _on_filter(self, event: Input.Changed) -> None:
@@ -360,6 +466,36 @@ class ApiExplorerScreen(Screen):
         self.query_one("#endpoint-summary", Static).update(
             f"[$text-muted]{ep.category}[/]\n[b]{ep.method}[/b] {ep.summary}{warn}{scope}"
         )
+        self._update_warning(ep)
+
+    def _update_warning(self, ep: ApiEndpoint) -> None:
+        """Show a persistent banner for any endpoint that modifies or deletes."""
+        banner = self.query_one("#mutation-warning", Static)
+        banner.display = ep.mutates
+        banner.set_class(ep.method == "DELETE", "delete")
+        if ep.method == "DELETE":
+            banner.update(
+                "⚠  DELETE — permanently removes a resource. "
+                "You'll be asked to confirm twice."
+            )
+        elif ep.mutates:
+            banner.update(
+                f"⚠  {ep.method} modifies org state. Confirm before sending."
+            )
+
+    def action_show_curl(self) -> None:
+        """Pop a modal with a ``curl`` snippet for the currently composed request."""
+        if self._current is None:
+            self._set_status("[yellow]Select an endpoint first.[/yellow]")
+            return
+        path = self.query_one("#path-input", Input).value.strip()
+        url = f"{API_ROOT}{path}" if path.startswith("/") else path
+        query = self.query_one("#query-input", Input).value.strip()
+        if query:
+            url += f"?{query}"
+        body = self.query_one("#body-input", TextArea).text
+        snippet = _curl_snippet(self._current.method, url, body)
+        self.app.push_screen(ShellSnippetScreen(snippet))
 
     def action_send(self) -> None:
         if self._current is None:
@@ -372,13 +508,50 @@ class ApiExplorerScreen(Screen):
             )
             return
         method = self._current.method
-        if self._current.mutates:
+        if method == "DELETE":
+            self._confirm_delete(method, path)
+        elif self._current.mutates:
             self.app.push_screen(
                 ConfirmScreen(method, path),
                 lambda ok: self._do_send(method, path) if ok else None,
             )
         else:
             self._do_send(method, path)
+
+    def _confirm_delete(self, method: str, path: str) -> None:
+        """Gate a DELETE behind two separate confirmations before sending."""
+
+        def second(ok: bool) -> None:
+            if ok:
+                self._do_send(method, path)
+
+        def first(ok: bool) -> None:
+            if ok:
+                self.app.push_screen(
+                    ConfirmScreen(
+                        method,
+                        path,
+                        message=(
+                            "[b]Final confirmation.[/b] This [b]cannot be undone[/b]. "
+                            "Delete this resource for real?"
+                        ),
+                        confirm_label="Delete (y)",
+                    ),
+                    second,
+                )
+
+        self.app.push_screen(
+            ConfirmScreen(
+                method,
+                path,
+                message=(
+                    "This will [b]permanently delete[/b] the resource at this path. "
+                    "Continue?"
+                ),
+                confirm_label="Continue (y)",
+            ),
+            first,
+        )
 
     def _do_send(self, method: str, path: str) -> None:
         params = dict(
