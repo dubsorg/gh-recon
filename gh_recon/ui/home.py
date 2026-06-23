@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
@@ -58,6 +60,43 @@ def _gradient_banner(start=(0x39, 0xFF, 0x14), end=(0x00, 0xE5, 0xFF)) -> Text:
     return out
 
 
+# GitHub contribution-graph palette: an empty cell + four "intensity" greens.
+_CONTRIB_LEVELS = ["#1b2027", "#0e4429", "#006d32", "#26a641", "#39d353"]
+_CONTRIB_ROWS = 7
+_CONTRIB_COLS = 48
+
+
+def _gen_contrib(seed: str) -> list[list[int]]:
+    """A stable, sparse 0–4 intensity grid (mostly empty, GitHub-like)."""
+    rng = random.Random(seed)
+    return [
+        [rng.choices((0, 1, 2, 3, 4), weights=(52, 20, 14, 9, 5))[0]
+         for _ in range(_CONTRIB_COLS)]
+        for _ in range(_CONTRIB_ROWS)
+    ]
+
+
+def _render_contrib(grid: list[list[int]], revealed: int, sweep: int | None) -> Text:
+    """Render the grid: columns ``< revealed`` are shown; unrevealed ones stay blank.
+
+    ``sweep`` (a column index, or ``None``) lights up a two-wide band by boosting
+    those cells' intensity — a soft highlight that travels across the graph.
+    """
+    out = Text(justify="center")
+    last_row = len(grid) - 1
+    for r, row in enumerate(grid):
+        for c, lvl in enumerate(row):
+            if c >= revealed:
+                out.append("  ")  # keep line width constant so centering is stable
+                continue
+            if sweep is not None and 0 <= sweep - c <= 1:
+                lvl = min(4, lvl + 2)
+            out.append("█ ", style=_CONTRIB_LEVELS[lvl])
+        if r < last_row:
+            out.append("\n")
+    return out
+
+
 class HomeScreen(Screen):
     """Top-level menu; each option pushes a domain screen."""
 
@@ -75,6 +114,7 @@ class HomeScreen(Screen):
     HomeScreen { align: center middle; }
     #menu { width: 104; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     #banner { width: 1fr; text-align: center; margin-bottom: 1; }
+    #contrib { width: 1fr; height: 7; text-align: center; margin-bottom: 1; }
     #menu-title { width: 1fr; text-align: center; margin-bottom: 1; }
     #stats { height: auto; align-horizontal: center; margin-bottom: 1; }
     .stat { width: 32; height: auto; border: round $panel; padding: 0 1; margin: 0 1; }
@@ -87,11 +127,16 @@ class HomeScreen(Screen):
         super().__init__()
         self.client = client
         self._cursor_on = True
+        self._contrib_grid = _gen_contrib(f"{client.org}/contrib")
+        self._contrib_frame = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="menu"):
             yield Static(_gradient_banner(), id="banner")
+            yield Static(
+                _render_contrib(self._contrib_grid, 0, None), id="contrib"
+            )
             yield Static("", id="menu-title")
             with Horizontal(id="stats"):
                 with Vertical(classes="stat"):
@@ -115,6 +160,7 @@ class HomeScreen(Screen):
         self._tagline = f"recon for [b]{self.client.org}[/b]  [dim]· select an area[/dim] "
         self._render_tagline()
         self.set_interval(0.5, self._blink_cursor)
+        self.set_interval(0.05, self._tick_contrib)
         self.query_one("#home-menu", OptionList).focus()
         self._animate_intro()
         self.load_counts()
@@ -159,6 +205,32 @@ class HomeScreen(Screen):
     def _blink_cursor(self) -> None:
         self._cursor_on = not self._cursor_on
         self._render_tagline()
+
+    def _tick_contrib(self) -> None:
+        """Animate the contribution graph: plant it left→right, then sweep-shimmer.
+
+        Reveal runs once; afterwards a soft highlight band sweeps across on a
+        cycle with an idle gap. During the gap we skip the redraw entirely so the
+        idle landing screen isn't repainting for nothing.
+        """
+        self._contrib_frame += 1
+        f = self._contrib_frame
+        speed = 2  # columns revealed per tick
+        reveal_end = _CONTRIB_COLS // speed
+        if f <= reveal_end:
+            self._paint_contrib(min(_CONTRIB_COLS, f * speed), None)
+            return
+        cycle = _CONTRIB_COLS + 70  # sweep span + idle gap before repeating
+        pos = (f - reveal_end) % cycle
+        if pos <= _CONTRIB_COLS + 2:
+            self._paint_contrib(_CONTRIB_COLS, pos)
+        elif pos == _CONTRIB_COLS + 3:
+            self._paint_contrib(_CONTRIB_COLS, None)  # settle once, then idle
+
+    def _paint_contrib(self, revealed: int, sweep: int | None) -> None:
+        self.query_one("#contrib", Static).update(
+            _render_contrib(self._contrib_grid, revealed, sweep)
+        )
 
     def _render_tagline(self) -> None:
         cursor = "[$accent]▌[/]" if self._cursor_on else " "

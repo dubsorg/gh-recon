@@ -86,8 +86,11 @@ its data is fetched) behave just like they do against the real API.
 
 ## Keys
 
-The landing screen shows live **member** and **repository** counts for the org
-(rendered with Textual's `Digits` widget) above the menu.
+The landing screen shows a gradient `GH-RECON` wordmark over an animated,
+GitHub-style **contribution graph** (seeded per-org so it's stable; it plants
+itself left-to-right on entry, then a soft highlight sweeps across), plus live
+**member** and **repository** counts for the org (rendered with Textual's
+`Digits` widget) above the menu.
 
 **Home menu**
 | Key | Action |
