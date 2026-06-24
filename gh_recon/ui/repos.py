@@ -6,8 +6,17 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, Static
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Markdown,
+    Static,
+)
 
 from ..api import GitHubClient, GitHubError
 from ..models import CommitInfo, Page, Repo
@@ -145,6 +154,54 @@ class RepositoriesScreen(Screen):
         )
 
 
+class ChangeVisibilityScreen(ModalScreen[str | None]):
+    """Single-step visibility picker for a repo: choosing a target *is* the confirm.
+
+    Deliberately one interaction — no second "type the repo name" step — so it's
+    a single prompt. Dismisses with the chosen visibility, or ``None`` on cancel.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    ChangeVisibilityScreen { align: center middle; }
+    #vis-box { width: 64; height: auto; border: round $warning; padding: 1 2; background: $surface; }
+    #vis-box Label { margin-bottom: 1; }
+    #vis-buttons { height: auto; align-horizontal: center; }
+    #vis-buttons Button { margin: 0 1; }
+    """
+
+    def __init__(self, full_name: str, current: str) -> None:
+        super().__init__()
+        self._full_name = full_name
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vis-box"):
+            yield Label(
+                f"[b]{self._full_name}[/b]\n\n"
+                f"Current visibility: [b]{self._current}[/b]\n\n"
+                "Pick the new visibility — it applies [b]immediately[/b], you "
+                "won't be asked again."
+            )
+            with Horizontal(id="vis-buttons"):
+                for vis in ("public", "private", "internal"):
+                    if vis != self._current:
+                        yield Button(f"Make {vis}", id=f"vis-{vis}", variant="warning")
+                yield Button("Cancel (Esc)", id="vis-cancel")
+
+    @on(Button.Pressed)
+    def _on_button(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid.startswith("vis-") and bid != "vis-cancel":
+            self.dismiss(bid[len("vis-"):])
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class RepoDetailScreen(Screen):
     """Repository metadata, languages, contributors, and recent commits."""
 
@@ -152,6 +209,7 @@ class RepoDetailScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("r", "refresh", "Refresh"),
         Binding("o", "open_browser", "Open on GitHub"),
+        Binding("v", "change_visibility", "Change visibility"),
     ]
 
     CSS = """
@@ -168,6 +226,7 @@ class RepoDetailScreen(Screen):
         self.client = client
         self.repo_name = name
         self._html_url = f"https://github.com/{client.org}/{name}"
+        self._repo: Repo | None = None  # last-loaded metadata (for visibility action)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -203,6 +262,36 @@ class RepoDetailScreen(Screen):
 
         webbrowser.open(self._html_url)
         self.app.notify(f"Opening {self._html_url}")
+
+    def action_change_visibility(self) -> None:
+        if self._repo is None:
+            self.app.notify("Repo metadata not loaded yet.", severity="warning")
+            return
+        current = "private" if self._repo.private else "public"
+        self.app.push_screen(
+            ChangeVisibilityScreen(self._repo.full_name, current),
+            self._on_visibility_chosen,
+        )
+
+    def _on_visibility_chosen(self, visibility: str | None) -> None:
+        if visibility:
+            self._apply_visibility(visibility)
+
+    @work(exclusive=True, thread=True, group="visibility")
+    def _apply_visibility(self, visibility: str) -> None:
+        try:
+            repo = self.client.set_repo_visibility(self.repo_name, visibility)
+        except GitHubError as exc:
+            self.app.call_from_thread(
+                self.app.notify,
+                f"Visibility change failed: {exc}",
+                severity="error",
+            )
+            return
+        self.app.call_from_thread(self._render_meta, repo)
+        self.app.call_from_thread(
+            self.app.notify, f"Visibility set to {visibility}."
+        )
 
     def _set_tables_loading(self, value: bool) -> None:
         self.query_one("#contrib-table", DataTable).loading = value
@@ -251,6 +340,7 @@ class RepoDetailScreen(Screen):
             md.update(text or "*This repository has no README.*")
 
     def _render_meta(self, repo: Repo) -> None:
+        self._repo = repo
         self._html_url = repo.html_url or self._html_url
         self.query_one("#repo-title", Static).update(f"[b]{repo.full_name}[/b]")
         rows = [

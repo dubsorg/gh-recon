@@ -62,6 +62,35 @@ class ReposMixin:
         last = _last_page(resp)
         return last if last is not None else len(resp.json())
 
+    VISIBILITIES = ("public", "private", "internal")
+
+    def set_repo_visibility(self, name: str, visibility: str) -> Repo:
+        """Change a repo's visibility and return the updated :class:`Repo`.
+
+        ``PATCH /repos/{owner}/{repo}`` with ``{"visibility": …}`` (one of
+        public/private/internal — ``internal`` needs the org to be in an
+        enterprise). Needs admin on the repo (``repo`` / ``admin:org``). Raises
+        :class:`GitHubError` on any non-2xx so the caller can surface it.
+        """
+        if visibility not in self.VISIBILITIES:
+            raise GitHubError(
+                f"invalid visibility {visibility!r}; "
+                f"expected one of {', '.join(self.VISIBILITIES)}"
+            )
+        owner_repo = name if "/" in name else f"{self.org}/{name}"
+        resp = self._request(
+            "PATCH",
+            f"{API_ROOT}/repos/{owner_repo}",
+            json_body={"visibility": visibility},
+        )
+        if resp.status_code >= 400:
+            try:
+                msg = resp.json().get("message", resp.reason)
+            except ValueError:
+                msg = resp.reason
+            raise GitHubError(f"HTTP {resp.status_code}: {msg}", resp.status_code)
+        return self._repo_from_json(resp.json())
+
     def _list_all_repos(self, max_results: int = 500) -> list[Repo]:
         """Accumulate every org repo (for client-side search and run scans)."""
         repos: list[Repo] = []
