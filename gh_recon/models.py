@@ -130,56 +130,12 @@ class RunnerJob:
 
 @dataclass
 class ActionsUsage:
-    """Org Actions usage for the current cycle / last 30 days (best-effort)."""
+    """Org Actions billing minutes for the current cycle (best-effort)."""
 
     total_minutes: int | None
     paid_minutes: int | None
     included_minutes: int | None
     minutes_by_os: dict[str, int] = field(default_factory=dict)
-    runs_last_30d: int | None = None
-
-
-@dataclass
-class WorkflowPerformance:
-    """Per-workflow performance for one (repo, workflow) over the sample window.
-
-    One row of the Actions performance breakdown. ``jobs`` is best-effort: job
-    counts are sampled per workflow and extrapolated to ``runs`` (the runs
-    endpoint carries no job count), so it's an estimate, not an exact total.
-    """
-
-    workflow: str  # workflow name (run "name")
-    repo: str  # source repository (short name)
-    runs: int  # completed runs counted in the sample
-    jobs: int  # estimated total jobs across those runs (best-effort)
-    has_failures: bool  # any counted run concluded "failure"
-    avg_duration_s: float | None = None
-
-
-@dataclass
-class ActionsPerformance:
-    """Org Actions performance over the past ``window_days`` (best-effort).
-
-    Derived from a bounded sample of recent workflow runs across the org's
-    most-recently-pushed repos, so the figures describe the sample, not every
-    run in the org.
-    """
-
-    window_days: int
-    sampled_runs: int  # runs inspected for the stats below
-    completed_runs: int  # of sampled, those that finished
-    by_conclusion: dict[str, int] = field(default_factory=dict)
-    avg_duration_s: float | None = None
-    median_duration_s: float | None = None
-    repos_scanned: int = 0
-    workflows: list[WorkflowPerformance] = field(default_factory=list)
-
-    @property
-    def success_rate(self) -> float | None:
-        """Fraction of completed sampled runs that concluded ``success``."""
-        if not self.completed_runs:
-            return None
-        return self.by_conclusion.get("success", 0) / self.completed_runs
 
 
 @dataclass
