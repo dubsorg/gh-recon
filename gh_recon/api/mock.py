@@ -32,7 +32,9 @@ from ..models import (
     Runner,
     RunnerJob,
     UserInfo,
+    WorkflowInfo,
 )
+from .actions import _workflow_order
 from .base import API_ROOT, DEFAULT_PAGE_SIZE, GitHubError, _paginate_list
 from .explorer import build_catalog
 
@@ -427,6 +429,47 @@ class MockClient:
             for lang in rng.sample(_LANGS, rng.randint(1, 4)):
                 totals[lang] = totals.get(lang, 0) + rng.randint(1000, 800000)
         return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+    @_latent
+    def repo_workflows(self, name: str, limit: int = 30) -> list[WorkflowInfo]:
+        key = name.split("/")[-1]
+        rng = random.Random(f"{self.org}/{key}/workflows")
+        if rng.random() < 0.1:
+            return []  # some repos have no workflows
+        count = min(limit, rng.randint(1, len(_WORKFLOWS)))
+        conclusions = ["success"] * 6 + ["failure"] * 2 + ["cancelled", "skipped"]
+        out: list[WorkflowInfo] = []
+        for i, wf_name in enumerate(rng.sample(_WORKFLOWS, count)):
+            state = "active" if rng.random() < 0.9 else "disabled_manually"
+            running = state == "active" and rng.random() < 0.25
+            never_ran = not running and rng.random() < 0.1
+            status = conclusion = None
+            started = duration = None
+            if running:
+                status = "in_progress"
+                started = self._now - timedelta(minutes=rng.randint(1, 45))
+            elif not never_ran:
+                status = "completed"
+                conclusion = rng.choice(conclusions)
+                started = self._now - timedelta(
+                    hours=rng.randint(1, 400), minutes=rng.randint(0, 59)
+                )
+                duration = rng.randint(30, 4000)
+            out.append(
+                WorkflowInfo(
+                    id=9000 + i,
+                    name=wf_name,
+                    path=f".github/workflows/{wf_name.lower().replace(' ', '-')}.yml",
+                    state=state,
+                    running=running,
+                    last_status=status,
+                    last_conclusion=conclusion,
+                    last_run_at=started,
+                    last_duration_s=duration,
+                )
+            )
+        out.sort(key=_workflow_order)
+        return out
 
     # -- runners ----------------------------------------------------------
 

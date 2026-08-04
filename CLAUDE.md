@@ -22,7 +22,7 @@ gh_recon/
     base.py       #   transport: BaseClient (_get/_request/_graphql), GitHubError, resolve_token, parse helpers
     members.py    #   MembersMixin: list/search/count members, org_role
     repos.py      #   ReposMixin: list/search/get/count repos, contributors, commits, languages, readme, set_repo_visibility
-    actions.py    #   ActionsMixin: usage + self-hosted runners (+ runner group, current-job correlation)
+    actions.py    #   ActionsMixin: usage + self-hosted runners (+ runner group, current-job correlation) + repo_workflows
     users.py      #   UsersMixin: profile, keys, teams, audit log, authored-commit activity
     copilot.py    #   CopilotMixin: Copilot seat billing + usage metrics
     explorer.py   #   ExplorerMixin: OpenAPI-generated endpoint catalog + raw api_call (build_catalog)

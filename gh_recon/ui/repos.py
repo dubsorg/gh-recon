@@ -19,8 +19,21 @@ from textual.widgets import (
 )
 
 from ..api import GitHubClient, GitHubError
-from ..models import CommitInfo, Page, Repo
-from .common import Paginator, _fmt_dt, _language_chart
+from ..models import CommitInfo, Page, Repo, WorkflowInfo
+from .common import Paginator, _fmt_dt, _fmt_duration, _language_chart
+
+# Rich style per workflow-run conclusion for the Workflows table.
+_CONCLUSION_STYLE = {
+    "success": "green",
+    "failure": "red",
+    "startup_failure": "red",
+    "timed_out": "red",
+    "action_required": "yellow",
+    "cancelled": "dim",
+    "skipped": "dim",
+    "neutral": "dim",
+    "stale": "dim",
+}
 
 
 class RepositoriesScreen(Screen):
@@ -227,6 +240,7 @@ class RepoDetailScreen(Screen):
         self.repo_name = name
         self._html_url = f"https://github.com/{client.org}/{name}"
         self._repo: Repo | None = None  # last-loaded metadata (for visibility action)
+        self._workflows: list[WorkflowInfo] | None = None  # last rendered, to skip no-op repaints
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -238,6 +252,11 @@ class RepoDetailScreen(Screen):
                 yield Label("[b]README[/b]", id="readme-label")
                 yield Markdown("", id="repo-readme")
             with Vertical(id="repo-right"):
+                yield Label("[b]Workflows[/b]")
+                yield Static("", id="wf-status")
+                wf = DataTable(id="wf-table", zebra_stripes=True, cursor_type="row")
+                wf.add_columns("Workflow", "Last run", "When (UTC)", "Took")
+                yield wf
                 yield Label("[b]Top contributors[/b]")
                 yield Static("", id="contrib-status")
                 contrib = DataTable(id="contrib-table", zebra_stripes=True, cursor_type="row")
@@ -253,6 +272,7 @@ class RepoDetailScreen(Screen):
     def on_mount(self) -> None:
         self.sub_title = f"{self.client.org}/{self.repo_name}"
         self.load_repo()
+        self.set_interval(5, self.load_workflows)
 
     def action_refresh(self) -> None:
         self.load_repo()
@@ -294,6 +314,7 @@ class RepoDetailScreen(Screen):
         )
 
     def _set_tables_loading(self, value: bool) -> None:
+        self.query_one("#wf-table", DataTable).loading = value
         self.query_one("#contrib-table", DataTable).loading = value
         self.query_one("#rcommits-table", DataTable).loading = value
         self.query_one("#repo-readme", Markdown).loading = value
@@ -315,6 +336,7 @@ class RepoDetailScreen(Screen):
             self.app.call_from_thread(self._render_languages, langs, None)
         except GitHubError as exc:
             self.app.call_from_thread(self._render_languages, [], str(exc))
+        self.app.call_from_thread(self.load_workflows)
         try:
             contributors = self.client.repo_contributors(self.repo_name)
             self.app.call_from_thread(self._render_contributors, contributors, None)
@@ -371,6 +393,58 @@ class RepoDetailScreen(Screen):
             widget.update("\n[$text-muted]Languages[/]    [dim]none[/dim]")
             return
         widget.update("\n[$text-muted]Languages[/]\n" + _language_chart(langs))
+
+    @work(exclusive=True, thread=True, group="workflows")
+    def load_workflows(self) -> None:
+        """Fetch + render the Workflows section; re-run every 5 s to poll runs."""
+        try:
+            workflows = self.client.repo_workflows(self.repo_name)
+        except GitHubError as exc:
+            self.app.call_from_thread(self._render_workflows, [], str(exc))
+            return
+        self.app.call_from_thread(self._render_workflows, workflows, None)
+
+    def _render_workflows(
+        self, workflows: list[WorkflowInfo], error: str | None
+    ) -> None:
+        status = self.query_one("#wf-status", Static)
+        table = self.query_one("#wf-table", DataTable)
+        if error is None and workflows == self._workflows and not table.loading:
+            return  # poll found nothing new — leave the table (and cursor) alone
+        self._workflows = workflows if error is None else None
+        table.loading = False
+        table.clear()
+        if error:
+            status.update(f"[yellow]unavailable: {error}[/yellow]")
+            return
+        if not workflows:
+            status.update("[dim]none[/dim]")
+            return
+        running = sum(1 for w in workflows if w.running)
+        line = f"[green]{len(workflows)}[/green] workflow(s)"
+        if running:
+            line += f" · [yellow]{running} running[/yellow]"
+        status.update(line)
+        for w in workflows:
+            name = w.name
+            if w.state != "active":
+                name += " [dim](disabled)[/dim]"
+            if w.running:
+                last = "[yellow]⟳ running[/yellow]"
+            elif w.last_conclusion:
+                style = _CONCLUSION_STYLE.get(w.last_conclusion, "dim")
+                last = f"[{style}]{w.last_conclusion}[/{style}]"
+            elif w.last_status:
+                last = w.last_status
+            else:
+                last = "[dim]never run[/dim]"
+            table.add_row(
+                name,
+                last,
+                _fmt_dt(w.last_run_at),
+                _fmt_duration(w.last_duration_s),
+                key=str(w.id),
+            )
 
     def _render_contributors(self, contributors, error: str | None) -> None:
         status = self.query_one("#contrib-status", Static)

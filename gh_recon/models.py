@@ -129,6 +129,21 @@ class RunnerJob:
 
 
 @dataclass
+class WorkflowInfo:
+    """A repo workflow tagged with its most recent run (best-effort)."""
+
+    id: int
+    name: str
+    path: str  # e.g. ".github/workflows/ci.yml"
+    state: str  # "active", "disabled_manually", …
+    running: bool  # a run of this workflow is currently queued or in progress
+    last_status: str | None  # latest run's status (completed/in_progress/queued)
+    last_conclusion: str | None  # latest run's conclusion (success/failure/…)
+    last_run_at: datetime | None  # when the latest run started (UTC)
+    last_duration_s: int | None  # latest completed run's wall time, seconds
+
+
+@dataclass
 class ActionsUsage:
     """Org Actions billing minutes for the current cycle (best-effort)."""
 

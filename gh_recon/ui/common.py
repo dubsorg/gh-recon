@@ -63,6 +63,19 @@ def _fmt_dt(value: str | datetime | None) -> str:
     return value.replace("T", " ").replace("Z", "")
 
 
+def _fmt_duration(seconds: int | None) -> str:
+    """Render a wall-time duration as e.g. "42s", "4m 05s", "1h 12m"."""
+    if seconds is None:
+        return "—"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
 def _language_chart(langs: list[tuple[str, int]]) -> str:
     """Render a list of (language, bytes) as a padded percentage bar chart."""
     total = sum(b for _, b in langs) or 1
