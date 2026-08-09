@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m venv .venv)",
+      "Bash(./.venv/bin/pip install *)",
+      "Bash(./.venv/bin/python -c \"import textual, requests; print\\('textual', textual.__version__\\)\")",
+      "Bash(./.venv/bin/python -c \"import ast; ast.parse\\(open\\('gh_recon/app.py'\\).read\\(\\)\\); ast.parse\\(open\\('gh_recon/api.py'\\).read\\(\\)\\); print\\('parse OK'\\)\")",
+      "Bash(./.venv/bin/python -)",
+      "Bash(git push *)",
+      "Bash(.venv/bin/python -c \"import textual; print\\('textual', textual.__version__\\)\")",
+      "Bash(.venv/bin/python -c \"from textual.widgets import OptionList; from textual.widgets.option_list import Option; print\\('OptionList OK'\\)\")",
+      "Bash(.venv/bin/python *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(gh pr *)",
+      "Bash(TEXTUAL_ANIMATIONS=none .venv/bin/python *)",
+      "Bash(mktemp -d)",
+      "Bash(XDG_CONFIG_HOME=__CMDSUB_OUTPUT__ .venv/bin/python -c ' *)",
+      "Bash(python -c \"import gh_recon.api, gh_recon.ui\")",
+      "Bash(python3 -c \"import gh_recon.api, gh_recon.ui\")",
+      "Bash(python -c ' *)",
+      "Bash(./run.sh --help)",
+      "Bash(command -v python3)",
+      "Bash(PYTHONPATH=. .venv/bin/python *)",
+      "WebFetch(domain:docs.github.com)",
+      "WebSearch"
+    ]
+  }
+}
