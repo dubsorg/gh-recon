@@ -52,6 +52,3 @@ COPY --chown=vscode:vscode .zshrc /home/vscode/.zshrc
 
 # Install AstroNvim
 COPY --chown=vscode:vscode nvim /home/vscode/.config/nvim
-
-
-`
