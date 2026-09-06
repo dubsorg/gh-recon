@@ -8,6 +8,7 @@ Scoped to a single organization, it opens to a **home menu** that branches into:
 - **Users** — search the org's members by login, then **get user info**: full profile, org-membership role, **team memberships**, **most-used languages**, **public SSH/GPG keys** (with SSH fingerprints), **repos recently committed to**, and **recent audit-log events** for that user within the org.
 - **Repositories** — filter the org's repos by name/description, then drill into a repo for metadata, **language breakdown**, its **workflows** (currently-running ones highlighted first, plus each workflow's last-run status, timestamp, and duration — silently re-polled every 5 s), **top contributors**, **recent commits**, and its **rendered README** (Markdown).
 - **Actions** — org Actions **billing minutes** (minutes used / paid, with a by-OS breakdown) shown with `Digits`, plus the org's **self-hosted runners**, **grouped by runner group**, with online/offline status, idle/busy state (an animated spinner for busy runners), labels, and — for busy runners — the **workflow / job** they're currently running and on which repo.
+- **Audit Log** — the **org-wide audit-log event stream**, filterable with the audit log's native **search syntax** (`action:`, `actor:`, `repo:`, `created:`, free text) plus one-key **high-risk presets** (repo visibility changes, repo deletions, member role changes/removals, PAT and OAuth-app events). Press `g` to **group the page by actor**, Enter on an event for its **raw JSON payload**, or `u` to pivot to the actor's user detail.
 - **Copilot** — org Copilot **seat breakdown** (total/active/inactive, seat-management & public-suggestions policy) and **usage metrics** over the reporting window: active/engaged users plus per-language **suggestions, acceptances, and acceptance rate**.
 - **API Explorer** — a **filterable catalog** of every org-scoped and **GitHub Enterprise Cloud** REST endpoint, generated from GitHub's **OpenAPI description** (see `scripts/gen_catalog.py`), shown as a **collapsible tree** grouped by **category** (actions, copilot, dependabot, teams, …) with a colored method **pill** beside each entry. Pick an endpoint and its path is pre-filled with the selected org; fill any remaining `{placeholders}`, add a query string and (for writes) a JSON body, then **send**. Press **`c`** to pop a copy-pasteable **`curl` snippet** of the composed request (the real token is never embedded — the snippet reads `$GH_TOKEN`). List responses render as an **auto-columned, theme-styled table** (zebra rows; identifying fields like id/name/login/state are deduced from the items; nested objects are skipped) with a **toggle** to the **raw JSON** view and, for multi-page results, a **pager** (default page size **10**, using the endpoint's `page`/`per_page` + Link header); non-list responses show pretty-printed JSON. Every response shows status, latency, and rate-limit budget, and 4xx/5xx bodies are shown verbatim so you can inspect errors. All HTTP verbs are supported, but **mutating requests** (POST/PATCH/PUT/DELETE) raise a persistent **warning banner** when selected and require an explicit **confirmation** before they're sent — and **DELETE** prompts **twice** to be safe.
 
@@ -36,9 +37,10 @@ automatically — no manual setup. Override the interpreter with `GH_RECON_PYTHO
 A token is resolved in this order: `--token`, `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`.
 
 - Member search and user info need a normal token (`read:org` for full member visibility).
-- **Audit log** requires an **organization owner** token with the `read:audit_log` scope
+- **Audit log** (the org-wide screen and the per-user view) requires an **organization
+  owner** token with the `read:audit_log` scope
   (fine-grained: *Organization → Administration* read) and is a **GitHub Enterprise Cloud**
-  feature. Without it, the user-info screen shows a clear "audit log unavailable" notice and
+  feature. Without it, those screens show a clear "audit log unavailable" notice and
   the rest of the app still works.
 - **Actions** runners require an **organization admin** token with `admin:org` (fine-grained:
   *Organization → Self-hosted runners* read); usage **minutes** additionally need org billing
@@ -97,6 +99,7 @@ itself left-to-right on entry, then a soft highlight sweeps across), plus live
 | `u` | Users |
 | `R` | Repositories |
 | `a` | Actions |
+| `l` | Audit Log |
 | `c` | Copilot |
 | `e` | API Explorer |
 | `q` | Quit |
@@ -133,6 +136,19 @@ itself left-to-right on entry, then a soft highlight sweeps across), plus live
 **Actions**
 | Key | Action |
 | --- | --- |
+| `r` | Refresh |
+| `Esc` | Back to home menu |
+
+**Audit Log**
+| Key | Action |
+| --- | --- |
+| `/` | Focus the filter box (audit-log search syntax: `action:`, `actor:`, `repo:`, `created:`, free text) |
+| `1`–`6` | High-risk presets (visibility changes, repo deletes, role changes, removals, PATs, OAuth apps) |
+| `0` | Clear the filter |
+| `Enter` | View the selected event's raw JSON |
+| `g` | Toggle grouping the page's events by actor |
+| `u` | Open the selected event's actor in user detail |
+| `n` / `p` | Next / previous page |
 | `r` | Refresh |
 | `Esc` | Back to home menu |
 
@@ -173,11 +189,12 @@ gh_recon/
     mock.py       #   offline MockClient: synthetic data for --mock
   ui/             # Textual screens, one module per domain
     app.py        #   app shell + org prompt
-    home.py       #   landing menu (Users / Repositories / Actions / Copilot / API Explorer)
+    home.py       #   landing menu (Users / Repositories / Actions / Audit Log / Copilot / API Explorer)
     members.py    #   member-search screen
     users.py      #   user-detail screen
     repos.py      #   repository list + detail screens
     actions.py    #   Actions usage + runners screen
+    audit.py      #   org-wide audit-log screen + event JSON modal
     copilot.py    #   Copilot metrics screen
     explorer.py   #   API explorer screen (catalog + request builder) + confirm/snippet modals
     common.py     #   shared formatting helpers + Paginator

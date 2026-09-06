@@ -31,11 +31,12 @@ gh_recon/
     __init__.py   #   assembles GitHubClient from the mixins; re-exports GitHubError, resolve_token, MockClient
   ui/             # Textual presentation layer, one module per domain
     app.py        #   GhReconApp shell + OrgPromptScreen
-    home.py       #   HomeScreen landing menu (Users / Repositories / Actions / Copilot / API Explorer)
+    home.py       #   HomeScreen landing menu (Users / Repositories / Actions / Audit Log / Copilot / API Explorer)
     members.py    #   MembersScreen (member search)
     users.py      #   UserDetailScreen
     repos.py      #   RepositoriesScreen + RepoDetailScreen + ChangeVisibilityScreen (single-confirm visibility)
     actions.py    #   ActionsScreen (usage + runners + current job)
+    audit.py      #   AuditLogScreen (org-wide audit log: phrase filter + presets + group-by-actor) + event JSON modal
     copilot.py    #   CopilotScreen (seats + usage metrics)
     explorer.py   #   ApiExplorerScreen (grouped endpoint tree + request builder + response) + ConfirmScreen + ShellSnippetScreen
     common.py     #   shared formatting helpers (_fmt_dt, _language_chart) + Paginator

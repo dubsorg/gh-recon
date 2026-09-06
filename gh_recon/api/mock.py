@@ -56,8 +56,10 @@ _REPO_WORDS = ["core", "api", "web", "infra", "cli", "auth", "data", "edge",
                "service", "worker", "bridge", "engine", "gateway", "sdk",
                "pipeline", "dashboard", "scheduler", "registry", "proxy"]
 _ACTIONS = ["repo.create", "repo.destroy", "team.add_member", "org.update_member",
-            "protected_branch.update", "members.remove", "oauth_access.create",
-            "repo.access", "workflows.approve_workflow_job", "secret_scanning.enable"]
+            "protected_branch.update", "org.remove_member", "oauth_access.create",
+            "repo.access", "workflows.approve_workflow_job", "secret_scanning.enable",
+            "personal_access_token.access_granted", "oauth_application.create",
+            "org.add_member", "hook.create"]
 _WORKFLOWS = ["CI", "Release", "Deploy", "Lint", "Nightly", "Integration Tests"]
 _JOBS = ["build", "test", "lint", "publish", "package", "e2e"]
 
@@ -92,6 +94,34 @@ def _paginate(items: list, params: dict | None):
     start = (page - 1) * per_page
     chunk = items[start : start + per_page]
     return chunk, page > 1, start + per_page < len(items)
+
+
+def _audit_match(event: AuditEvent, phrase: str) -> bool:
+    """Minimal emulation of audit-log search syntax for the mock.
+
+    Supports ``actor:``/``action:``/``repo:`` qualifiers (``action:`` matches
+    category prefixes like the real API) plus free-text substring terms.
+    """
+    for token in phrase.split():
+        qual, _, value = token.partition(":")
+        value_l = value.lower()
+        if qual == "actor" and value:
+            if (event.actor or "").lower() != value_l:
+                return False
+        elif qual == "action" and value:
+            if not event.action.lower().startswith(value_l):
+                return False
+        elif qual == "repo" and value:
+            repo = (event.repo or "").lower()
+            if repo != value_l and not repo.endswith(f"/{value_l}"):
+                return False
+        else:
+            haystack = " ".join(
+                filter(None, (event.action, event.actor, event.repo))
+            ).lower()
+            if token.lower() not in haystack:
+                return False
+    return True
 
 
 class MockClient:
@@ -641,22 +671,70 @@ class MockClient:
         cursor: int | None = None,
         per_page: int = DEFAULT_PAGE_SIZE,
     ) -> Page[AuditEvent]:
+        events = [e for e in self._org_audit_log() if e.actor == login]
+        # Per-actor histories used to be independent; keep them non-empty-ish
+        # by synthesizing a few extra events for actors thin in the org log.
         rng = random.Random(f"{self.org}/{login}/audit")
-        events = []
         when = self._now
-        for _ in range(rng.randint(0, 55)):
+        for _ in range(rng.randint(0, 25)):
             when = when - timedelta(hours=rng.randint(1, 200))
             repo = rng.choice(self._repos)
+            events.append(self._audit_event(login, rng.choice(_ACTIONS), when,
+                                            rng.choice([None, repo.full_name])))
+        events.sort(key=lambda e: e.timestamp or self._now, reverse=True)
+        return _paginate_list(events, cursor or 1, per_page)
+
+    @_latent
+    def org_audit_events(
+        self,
+        phrase: str | None = None,
+        cursor: int | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[AuditEvent]:
+        events = self._org_audit_log()
+        if phrase:
+            events = [e for e in events if _audit_match(e, phrase)]
+        return _paginate_list(events, cursor or 1, per_page)
+
+    def _org_audit_log(self) -> list[AuditEvent]:
+        """Cached org-wide synthetic event stream (newest first)."""
+        cached = getattr(self, "_audit_cache", None)
+        if cached is not None:
+            return cached
+        rng = random.Random(f"{self.org}/audit")
+        logins = [m.login for m in self._members] or ["mock-user"]
+        events: list[AuditEvent] = []
+        when = self._now
+        for _ in range(rng.randint(180, 260)):
+            when = when - timedelta(minutes=rng.randint(5, 600))
+            repo = rng.choice(self._repos)
             events.append(
-                AuditEvent(
-                    timestamp=when,
-                    action=rng.choice(_ACTIONS),
-                    actor=login,
-                    repo=rng.choice([None, repo.full_name]),
-                    raw={},
+                self._audit_event(
+                    rng.choice(logins),
+                    rng.choice(_ACTIONS),
+                    when,
+                    rng.choice([None, repo.full_name]),
                 )
             )
-        return _paginate_list(events, cursor or 1, per_page)
+        self._audit_cache = events
+        return events
+
+    def _audit_event(
+        self, actor: str, action: str, when: datetime, repo: str | None
+    ) -> AuditEvent:
+        raw = {
+            "@timestamp": int(when.timestamp() * 1000),
+            "action": action,
+            "actor": actor,
+            "org": self.org,
+            "created_at": int(when.timestamp() * 1000),
+            "actor_location": {"country_code": "US"},
+        }
+        if repo:
+            raw["repo"] = repo
+        return AuditEvent(
+            timestamp=when, action=action, actor=actor, repo=repo, raw=raw
+        )
 
     @_latent
     def recent_commit_repos(self, login: str,

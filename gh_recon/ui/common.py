@@ -47,7 +47,10 @@ class Paginator:
             self._cursors.append(page.next_cursor)
 
     def next(self) -> None:
-        if self._has_next:
+        # Bound by recorded cursors too: ``_has_next`` is stale while a page
+        # load is in flight, so a rapid second "next" could otherwise step past
+        # the cursors we actually know about.
+        if self._has_next and self._index + 1 < len(self._cursors):
             self._index += 1
 
     def prev(self) -> None:

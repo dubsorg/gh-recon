@@ -15,6 +15,7 @@ from textual.widgets.option_list import Option
 
 from ..api import GitHubClient, GitHubError
 from .actions import ActionsScreen
+from .audit import AuditLogScreen
 from .copilot import CopilotScreen
 from .explorer import ApiExplorerScreen
 from .members import MembersScreen
@@ -104,6 +105,7 @@ class HomeScreen(Screen):
         Binding("u", "open_users", "Users"),
         Binding("R", "open_repos", "Repositories"),
         Binding("a", "open_actions", "Actions"),
+        Binding("l", "open_audit", "Audit Log"),
         Binding("c", "open_copilot", "Copilot"),
         Binding("e", "open_explorer", "API Explorer"),
         Binding("enter", "open_selected", "Open", show=False),
@@ -149,6 +151,7 @@ class HomeScreen(Screen):
                 Option("Users          search org members and inspect profiles", id="users"),
                 Option("Repositories   browse org repositories and their detail", id="repos"),
                 Option("Actions        usage metrics + self-hosted runners", id="actions"),
+                Option("Audit Log      org-wide audit-log events with filters", id="audit"),
                 Option("Copilot        org Copilot seats and usage metrics", id="copilot"),
                 Option("API Explorer   call curated org/enterprise REST endpoints", id="explorer"),
                 id="home-menu",
@@ -254,6 +257,9 @@ class HomeScreen(Screen):
     def action_open_actions(self) -> None:
         self._open("actions")
 
+    def action_open_audit(self) -> None:
+        self._open("audit")
+
     def action_open_copilot(self) -> None:
         self._open("copilot")
 
@@ -267,6 +273,8 @@ class HomeScreen(Screen):
             self.app.push_screen(RepositoriesScreen(self.client))
         elif area == "actions":
             self.app.push_screen(ActionsScreen(self.client))
+        elif area == "audit":
+            self.app.push_screen(AuditLogScreen(self.client))
         elif area == "copilot":
             self.app.push_screen(CopilotScreen(self.client))
         elif area == "explorer":

@@ -45,20 +45,30 @@ class UsersMixin:
         cursor: str | None = None,
         per_page: int = DEFAULT_PAGE_SIZE,
     ) -> Page[AuditEvent]:
-        """One page of audit-log entries for a given actor within the org.
+        """One page of audit-log entries for a given actor within the org."""
+        return self.org_audit_events(
+            phrase=f"actor:{login}", cursor=cursor, per_page=per_page
+        )
 
-        The audit-log API is cursor-paginated, so ``cursor`` is the Link-header
-        URL of the next page (returned as ``next_cursor``); ``None`` fetches the
-        first page.
+    def org_audit_events(
+        self,
+        phrase: str | None = None,
+        cursor: str | None = None,
+        per_page: int = DEFAULT_PAGE_SIZE,
+    ) -> Page[AuditEvent]:
+        """One page of org-wide audit-log entries, optionally search-filtered.
+
+        ``phrase`` uses the audit-log search syntax (``action:``, ``actor:``,
+        ``repo:``, ``created:``, free text, …). The audit-log API is
+        cursor-paginated, so ``cursor`` is the Link-header URL of the next page
+        (returned as ``next_cursor``); ``None`` fetches the first page.
         """
         if cursor:
             resp = self._get(cursor)
         else:
-            params = {
-                "phrase": f"actor:{login}",
-                "per_page": per_page,
-                "order": "desc",
-            }
+            params: dict = {"per_page": per_page, "order": "desc"}
+            if phrase:
+                params["phrase"] = phrase
             resp = self._get(f"{API_ROOT}/orgs/{self.org}/audit-log", params=params)
         events: list[AuditEvent] = []
         for e in resp.json():
